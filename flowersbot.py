@@ -372,8 +372,8 @@ DASHBOARD_HTML = """
             </span>
         </header>
         <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8 text-center">
-            <div class="bg-slate-800 p-6 rounded-2xl border border-slate-700 shadow-lg"><p class="text-slate-400 text-xs">今日攔截總數</p><h2 class="text-5xl font-black">{{ config.total_deleted_count }}</h2></div>
-            <div class="bg-slate-800 p-6 rounded-2xl border border-slate-700 shadow-lg"><p class="text-slate-400 text-xs">有效黑名單筆數</p><h2 class="text-5xl font-black text-rose-500">{{ members | length }}</h2></div>
+            <div class="bg-slate-800 p-6 rounded-2xl border border-slate-700 shadow-lg"><p class="text-slate-400 text-xs">🈲 今日攔截總數</p><h2 class="text-5xl font-black">{{ config.total_deleted_count }}</h2></div>
+            <div class="bg-slate-800 p-6 rounded-2xl border border-slate-700 shadow-lg"><p class="text-slate-400 text-xs">👻 有效黑名單筆數</p><h2 class="text-5xl font-black text-rose-500">{{ members | length }}</h2></div>
         </div>
         <div class="grid grid-cols-1 lg:grid-cols-12 gap-8">
             <div class="lg:col-span-4 space-y-6">
