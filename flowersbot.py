@@ -245,6 +245,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
     user, chat, mgid = msg.from_user, msg.chat, msg.media_group_id
     if not user or user.is_bot: return
+
+    # --- 新增：管理員豁免邏輯 ---
+    try:
+        # 如果是私聊，直接跳過權限檢查
+        if chat.type != "private":
+            chat_member = await chat.get_member(user.id)
+            if chat_member.status in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]:
+                # 管理員發言完全不檢查，直接結束此函式
+                return 
+    except Exception as e:
+        logger.warning(f"檢查管理員權限時出錯: {e}")
+
     if mgid and mgid in config.flagged_media_groups:
         try: await msg.delete(); return
         except: pass
@@ -317,9 +329,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     parse_mode=ParseMode.HTML
                 )
             else:
-                sent_warn = await context.bot.send_message(chat.id, f"🦋 <b>霍格華茲警告通知</b> 🦋\n\n🦉用戶學員：{user.mention_html()}\n⚠️違反校規：{violation_reason}\n⚠️違規計次：({v_count}/{config.max_violations})\n🪄<b>多次違規將被黑魔法教授擊殺</b>", parse_mode=ParseMode.HTML)
+                sent_warn = await context.bot.send_message(chat.id, f"🦋 <b>霍格華茲警告通知</b> 🦋\n\n🦉用戶學員：{user.mention_html()}\n⚠️違反校規：{violation_reason}\n⚠️違規計次：({v_count}/{config.max_violations})\n🪄<b>多次違規將被黑魔法教師擊殺</b>", parse_mode=ParseMode.HTML)
                 await asyncio.sleep(config.warning_duration); await sent_warn.delete()
-        except Exception as e: config.add_log("ERROR", f"🦋處理失敗: {e}")
+        except Exception as e: config.add_log("ERROR", f"🦋 處理失敗: {e}")
     elif not msg.sticker:
         config.add_log("INFO", f"接收自 {user.first_name}: {' | '.join(all_texts)[:25]}...")
 
@@ -347,7 +359,6 @@ def update():
         config.telegram_link_whitelist = {t.strip().lower().replace("@", "") for t in request.form.get('tg_links', '').split(',') if t.strip()}
         config.blocked_phone_prefixes = {p.strip() for p in request.form.get('phone_pre', '').split(',') if p.strip()}
         config.blocked_keywords = {k.strip() for k in request.form.get('keywords', '').split(',') if k.strip()}
-        # 新增：儲存貼圖白名單
         config.sticker_whitelist = {s.strip().lower().replace("@", "") for s in request.form.get('sticker_ws', '').split(',') if s.strip()}
         config.add_log("SUCCESS", "🦋 規則與白名單已更新")
     except Exception as e: config.add_log("ERROR", f"🦋 更新失敗: {e}")
@@ -460,3 +471,4 @@ if __name__ == '__main__':
     tg_thread.start()
     port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)
+
