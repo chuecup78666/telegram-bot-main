@@ -185,11 +185,6 @@ class BotConfig:
     def get_blacklist_chats(self) -> Dict[int, str]:
         return {info["chat_id"]: info["chat_title"] for info in self.blacklist_members.values()}
 
-    def clean_old_data(self):
-        now = datetime.now()
-        expired = [gid for gid, ts in self.flagged_media_groups.items() if (now - ts).total_seconds() > 60]
-        for gid in expired: del self.flagged_media_groups[gid]
-
 config = BotConfig()
 
 # --- 4. 偵測與處理邏輯 ---
@@ -300,9 +295,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     violation_reason = "含有不明連結"; break
                 ext = tldextract.extract(url_clean)
                 if ext.registered_domain in ["t.me", "telegram.me", "telegram.dog"]:
-                    link_id = url_clean.split('/')[-1].split('?')[0]
+                    path = url_clean.split('t.me/')[-1] if 't.me/' in url_clean else url_clean.split('/')[-1]
+                    link_id = path.split('/')[0].split('?')[0].replace("@", "")
                     if link_id and not any(wl.strip().lower() in link_id for wl in config.telegram_link_whitelist):
-                        violation_reason = f"未授權的 Telegram 連結 (@{link_id})"; break
+                        violation_reason = f"未授權的 Telegram 連結 ({link_id})"; break
 
     if violation_reason:
         if mgid: config.flagged_media_groups[mgid] = datetime.now()
@@ -313,17 +309,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if v_count >= config.max_violations:
                 try: await context.bot.restrict_chat_member(chat.id, user.id, permissions=ChatPermissions(can_send_messages=False))
                 except: config.add_log("WARN", f"[{chat.title}] 技術禁言指令失敗，僅記錄公告")
-                
                 config.record_blacklist(user.id, user.full_name, chat.id, chat.title)
                 config.add_log("ERROR", f"🦋 用戶 {user.full_name} 在 [{chat.title}] 違規達上限，已公告封鎖並記錄黑名單")
-                
                 await context.bot.send_message(
                     chat_id=chat.id, 
                     text=f"🦋 <b>霍格華茲禁言通知</b> 🦋\n\n🦉用戶學員：{user.mention_html()}\n🈲發言已多次違反校規。\n🈲已被咒語《阿哇呾喀呾啦》擊殺⚡️\n🪄<b>如被誤殺請待在阿茲卡班內稍等\n並請客服通知鄧不利多校長幫你解禁</b>", 
                     parse_mode=ParseMode.HTML
                 )
             else:
-                sent_warn = await context.bot.send_message(chat.id, f"🦋 <b>霍格華茲警告通知</b> 🦋\n\n🦉用戶學員：{user.mention_html()}\n⚠️違反校規：{violation_reason}\n⚠️違規計次：({v_count}/{config.max_violations})\n🪄<b>多次違規將被黑魔法教師擊殺</b>", parse_mode=ParseMode.HTML)
+                sent_warn = await context.bot.send_message(chat.id, f"🦋 <b>霍格華茲警告通知</b> 🦋\n\n🦉用戶學員：{user.mention_html()}\n⚠️違反校規：{violation_reason}\n⚠️違規計次：({v_count}/{config.max_violations})\n🪄<b>多次違規將被黑魔法教授擊殺</b>", parse_mode=ParseMode.HTML)
                 await asyncio.sleep(config.warning_duration); await sent_warn.delete()
         except Exception as e: config.add_log("ERROR", f"🦋處理失敗: {e}")
     elif not msg.sticker:
@@ -350,11 +344,12 @@ def update():
         config.warning_duration = int(request.form.get('duration', 5))
         config.max_violations = int(request.form.get('max_v', 6))
         config.allowed_domains = {d.strip().lower() for d in request.form.get('domains', '').split(',') if d.strip()}
-        config.sticker_whitelist = {s.strip().lower().replace("@", "") for s in request.form.get('sticker_ws', '').split(',') if s.strip()}
         config.telegram_link_whitelist = {t.strip().lower().replace("@", "") for t in request.form.get('tg_links', '').split(',') if t.strip()}
         config.blocked_phone_prefixes = {p.strip() for p in request.form.get('phone_pre', '').split(',') if p.strip()}
         config.blocked_keywords = {k.strip() for k in request.form.get('keywords', '').split(',') if k.strip()}
-        config.add_log("SUCCESS", "🦋 規則與關鍵字已更新")
+        # 新增：儲存貼圖白名單
+        config.sticker_whitelist = {s.strip().lower().replace("@", "") for s in request.form.get('sticker_ws', '').split(',') if s.strip()}
+        config.add_log("SUCCESS", "🦋 規則與白名單已更新")
     except Exception as e: config.add_log("ERROR", f"🦋 更新失敗: {e}")
     return redirect(url_for('index'))
 
@@ -362,29 +357,18 @@ def update():
 def unban_member():
     try:
         user_id, chat_id = int(request.form.get('user_id')), int(request.form.get('chat_id'))
-        
-        # 從目前的黑名單快取抓取資訊
         key = f"{chat_id}_{user_id}"
         member_data = config.blacklist_members.get(key, {})
         chat_title = member_data.get("chat_title", f"ID: {chat_id}")
         user_name = member_data.get("name", f"學員 {user_id}")
-        
-        # 手動建構 HTML 提及連結（與 user.mention_html() 效果一致）
         mention = f'<a href="tg://user?id={user_id}">{user_name}</a>'
-        
         async def do_unban():
             try:
                 p = ChatPermissions(can_send_messages=True, can_send_audios=True, can_send_documents=True, can_send_photos=True, can_send_videos=True, can_send_video_notes=True, can_send_voice_notes=True, can_send_polls=True, can_send_other_messages=True, can_add_web_page_previews=True, can_invite_users=True, can_pin_messages=True, can_change_info=True)
                 await config.application.bot.restrict_chat_member(chat_id, user_id, p); await config.application.bot.unban_chat_member(chat_id, user_id, only_if_banned=True)
                 config.reset_violation(chat_id, user_id)
-                
                 config.add_log("SUCCESS", f"🦋 管理員透過網頁解封 {user_name} ({user_id})，地點為 [{chat_title}]。")
-                
-                n_msg = await config.application.bot.send_message(
-                    chat_id=chat_id, 
-                    text=f"🦋 <b>霍格華茲解禁通知</b> 🦋\n🦉用戶學員：{mention}\n✅經由魔法部審判為無罪\n✅已被鄧不利多從阿茲卡班救回\n🪄<b>請學員注意勿再違反校規</b>", 
-                    parse_mode=ParseMode.HTML
-                )
+                n_msg = await config.application.bot.send_message(chat_id=chat_id, text=f"🦋 <b>霍格華茲解禁通知</b> 🦋\n🦉用戶學員：{mention}\n✅經由魔法部審判為無罪\n✅已被鄧不利多從阿茲卡班救回\n🪄<b>請學員注意勿再違反校規</b>", parse_mode=ParseMode.HTML)
                 await asyncio.sleep(5); await n_msg.delete()
             except Exception as e: config.add_log("ERROR", f"🦋 解封錯誤: {e}")
         if config.loop: asyncio.run_coroutine_threadsafe(do_unban(), config.loop)
@@ -410,7 +394,7 @@ DASHBOARD_HTML = """
         </header>
         <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8 text-center">
             <div class="bg-slate-800 p-6 rounded-2xl border border-slate-700 shadow-lg"><p class="text-slate-400 text-xs">今日攔截總數</p><h2 class="text-5xl font-black">{{ config.total_deleted_count }}</h2></div>
-            <div class="bg-slate-800 p-6 rounded-2xl border border-slate-700 shadow-lg"><p class="text-slate-400 text-xs">有效黑名單筆數</p><h2 class="text-5xl font-black text-rose-500">{{ members | length }}</h2></div>
+            <div class="bg-slate-800 p-6 rounded-2xl border border-slate-700 shadow-lg"><p class="text-slate-400 text-xs">有效黑名單筆數</p><h2 class="text-5xl font-black text-rose-500">{{ config.blacklist_members | length }}</h2></div>
         </div>
         <div class="grid grid-cols-1 lg:grid-cols-12 gap-8">
             <div class="lg:col-span-4 space-y-6">
@@ -422,7 +406,8 @@ DASHBOARD_HTML = """
                             <div><label class="block text-[10px] text-slate-400">違規上限(次)</label><input type="number" name="max_v" value="{{ config.max_violations }}" class="w-full bg-slate-700 rounded p-1 text-sm text-white outline-none"></div>
                         </div>
                         <div><label class="block text-[10px] text-slate-400 text-rose-400">電話開頭黑名單</label><textarea name="phone_pre" rows="1" class="w-full bg-slate-700 rounded p-1 text-xs text-white outline-none">{{ config.blocked_phone_prefixes | join(', ') }}</textarea></div>
-                        <div><label class="block text-[10px] text-slate-400 text-rose-400">攔截關鍵字</label><textarea name="keywords" rows="2" class="w-full bg-slate-700 rounded p-1 text-xs text-white outline-none">{{ config.blocked_keywords | join(', ') }}</textarea></div>
+                        <div><label class="block text-[10px] text-slate-400 text-rose-400">攔截關鍵字</label><textarea name="keywords" rows="1" class="w-full bg-slate-700 rounded p-1 text-xs text-white outline-none">{{ config.blocked_keywords | join(', ') }}</textarea></div>
+                        <div><label class="block text-[10px] text-slate-400 text-rose-400 font-bold">貼圖 ID 白名單</label><textarea name="sticker_ws" rows="1" class="w-full bg-slate-700 rounded p-1 text-xs text-white outline-none">{{ config.sticker_whitelist | join(', ') }}</textarea></div>
                         <div><label class="block text-[10px] text-slate-400">網域白名單</label><textarea name="domains" rows="1" class="w-full bg-slate-700 rounded p-1 text-xs text-white outline-none">{{ config.allowed_domains | join(', ') }}</textarea></div>
                         <div><label class="block text-[10px] text-slate-400">TG 連結白名單</label><textarea name="tg_links" rows="1" class="w-full bg-slate-700 rounded p-1 text-xs text-white outline-none">{{ config.telegram_link_whitelist | join(', ') }}</textarea></div>
                         <button type="submit" class="w-full bg-sky-600 hover:bg-sky-500 py-2 rounded-xl font-bold text-sm text-white transition-all">儲存設定</button>
@@ -475,4 +460,3 @@ if __name__ == '__main__':
     tg_thread.start()
     port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)
-
