@@ -219,15 +219,16 @@ async def unban_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if member.status not in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]: return
         
         user_id = None
-        target_name = "未知用戶"
+        mention = "未知用戶"
         
         if update.message.reply_to_message:
-            user_id = update.message.reply_to_message.from_user.id
-            target_name = update.message.reply_to_message.from_user.full_name
+            target_user = update.message.reply_to_message.from_user
+            user_id = target_user.id
+            mention = target_user.mention_html()
         elif context.args:
             try: 
                 user_id = int(context.args[0])
-                target_name = f"UID:{user_id}"
+                mention = f'<a href="tg://user?id={user_id}">學員 {user_id}</a>'
             except: pass
             
         if user_id:
@@ -235,9 +236,11 @@ async def unban_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.restrict_chat_member(chat.id, user_id, p)
             config.reset_violation(chat.id, user_id)
             
-            # Log 強化：顯示解除地點與對象
-            config.add_log("SUCCESS", f"🦋 管理員在 [{chat.title}] 手動解除用戶 {target_name} 的監禁。")
-            msg = await update.message.reply_text(f"✅ 🦋用戶 {target_name} 已由管理員指令手動解除阿茲卡班監禁。")
+            config.add_log("SUCCESS", f"🦋 管理員在 [{chat.title}] 手動解除 {user_id} 的監禁。")
+            msg = await update.message.reply_text(
+                text=f"🦋 <b>霍格華茲解禁通知</b> 🦋\n🦉用戶學員：{mention}\n✅經由魔法部審判為無罪\n✅已被鄧不利多從阿茲卡班救回\n🪄<b>請學員注意勿再違反校規</b>",
+                parse_mode=ParseMode.HTML
+            )
             await asyncio.sleep(5); await msg.delete()
     except Exception as e: await update.message.reply_text(f"❌ 錯誤: {e}")
 
@@ -273,7 +276,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             s_set = await context.bot.get_sticker_set(msg.sticker.set_name)
             combined = (s_set.title + msg.sticker.set_name).lower()
             if ("@" in combined or "_by_" in combined) and not any(wd.replace("@","").lower() in combined for wd in config.sticker_whitelist):
-                # 修正：移除違規原因中顯示的 @ 符號，防止再次觸發連結
                 safe_title = s_set.title.replace("@", "")
                 violation_reason = f"貼圖包含未授權 ID ({safe_title})"
             else: all_texts.append(s_set.title)
@@ -313,7 +315,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 except: config.add_log("WARN", f"[{chat.title}] 技術禁言指令失敗，僅記錄公告")
                 
                 config.record_blacklist(user.id, user.full_name, chat.id, chat.title)
-                # Log 強化：顯示頻道名稱
                 config.add_log("ERROR", f"🦋 用戶 {user.full_name} 在 [{chat.title}] 違規達上限，已公告封鎖並記錄黑名單")
                 
                 await context.bot.send_message(
@@ -322,7 +323,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     parse_mode=ParseMode.HTML
                 )
             else:
-                sent_warn = await context.bot.send_message(chat.id, f"🦋 <b>霍格華茲警告通知</b> 🦋\n\n🦉用戶學員：{user.mention_html()}\n⚠️違反校規：{violation_reason}\n⚠️違規計次：({v_count}/{config.max_violations})\n🪄<b>多次違規將被黑魔法教授擊殺</b>", parse_mode=ParseMode.HTML)
+                sent_warn = await context.bot.send_message(chat.id, f"🦋 <b>霍格華茲警告通知</b> 🦋\n\n🦉用戶學員：{user.mention_html()}\n⚠️違反校規：{violation_reason}\n⚠️違規計次：({v_count}/{config.max_violations})\n🪄<b>多次違規將被黑魔法教師擊殺</b>", parse_mode=ParseMode.HTML)
                 await asyncio.sleep(config.warning_duration); await sent_warn.delete()
         except Exception as e: config.add_log("ERROR", f"🦋處理失敗: {e}")
     elif not msg.sticker:
@@ -362,9 +363,14 @@ def unban_member():
     try:
         user_id, chat_id = int(request.form.get('user_id')), int(request.form.get('chat_id'))
         
-        # 從目前的黑名單快取抓取群組名稱，讓 Log 更完整
+        # 從目前的黑名單快取抓取資訊
         key = f"{chat_id}_{user_id}"
-        chat_title = config.blacklist_members.get(key, {}).get("chat_title", f"ID: {chat_id}")
+        member_data = config.blacklist_members.get(key, {})
+        chat_title = member_data.get("chat_title", f"ID: {chat_id}")
+        user_name = member_data.get("name", f"學員 {user_id}")
+        
+        # 手動建構 HTML 提及連結（與 user.mention_html() 效果一致）
+        mention = f'<a href="tg://user?id={user_id}">{user_name}</a>'
         
         async def do_unban():
             try:
@@ -372,10 +378,13 @@ def unban_member():
                 await config.application.bot.restrict_chat_member(chat_id, user_id, p); await config.application.bot.unban_chat_member(chat_id, user_id, only_if_banned=True)
                 config.reset_violation(chat_id, user_id)
                 
-                # Log 強化：顯示地點
-                config.add_log("SUCCESS", f"🦋 管理員透過網頁解封學員 {user_id}，地點為 [{chat_title}]。")
+                config.add_log("SUCCESS", f"🦋 管理員透過網頁解封 {user_name} ({user_id})，地點為 [{chat_title}]。")
                 
-                n_msg = await config.application.bot.send_message(chat_id=chat_id, text=f"🦋 <b>霍格華茲解禁通知</b> 🦋\n🦉用戶學員：{user.mention_html()}\n✅經由魔法部審判為無罪\n✅已被鄧不利多從阿茲卡班救回\n🪄<b>請學員注意勿再違反校規</b>", parse_mode=ParseMode.HTML)
+                n_msg = await config.application.bot.send_message(
+                    chat_id=chat_id, 
+                    text=f"🦋 <b>霍格華茲解禁通知</b> 🦋\n🦉用戶學員：{mention}\n✅經由魔法部審判為無罪\n✅已被鄧不利多從阿茲卡班救回\n🪄<b>請學員注意勿再違反校規</b>", 
+                    parse_mode=ParseMode.HTML
+                )
                 await asyncio.sleep(5); await n_msg.delete()
             except Exception as e: config.add_log("ERROR", f"🦋 解封錯誤: {e}")
         if config.loop: asyncio.run_coroutine_threadsafe(do_unban(), config.loop)
@@ -466,3 +475,4 @@ if __name__ == '__main__':
     tg_thread.start()
     port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)
+
