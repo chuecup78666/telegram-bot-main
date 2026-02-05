@@ -125,7 +125,7 @@ class BotConfig:
         try:
             cloud_blacklist = self.db.load_all("blacklist")
             if not cloud_blacklist:
-                self.add_log("INFO", "🦋雲端黑名單目前為空")
+                self.add_log("INFO", "🦋 雲端黑名單目前為空")
                 return
             for item in cloud_blacklist:
                 uid, chat_id = item.get("uid"), item.get("chat_id")
@@ -140,9 +140,9 @@ class BotConfig:
                         "uid": uid, "name": item.get("name", "未知用戶"), "chat_id": chat_id,
                         "chat_title": item.get("chat_title", "未知群組"), "time": dt
                     }
-            self.add_log("INFO", f"🦋同步完成，載入 {len(self.blacklist_members)} 筆黑名單")
+            self.add_log("INFO", f"🦋 同步完成，載入 {len(self.blacklist_members)} 筆黑名單")
         except Exception as e:
-            self.add_log("ERROR", f"🦋同步雲端資料失敗: {e}")
+            self.add_log("ERROR", f"🦋 同步雲端資料失敗: {e}")
 
     def add_log(self, level: str, message: str):
         now = get_now_tw().strftime("%H:%M:%S")
@@ -236,7 +236,7 @@ async def unban_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             config.reset_violation(chat.id, user_id)
             
             config.add_log("SUCCESS", f"🦋 管理員在 [{chat.title}] 手動解除用戶 {target_name} 的監禁。")
-            msg = await update.message.reply_text(f"✅ 🦋用戶 {target_name} 已由管理員指令手動解除阿茲卡班監禁。")
+            msg = await update.message.reply_text(f"🦋 用戶 {target_name} 已由管理員指令手動解除阿茲卡班監禁。")
             await asyncio.sleep(5); await msg.delete()
     except Exception as e: await update.message.reply_text(f"❌ 錯誤: {e}")
 
@@ -349,8 +349,8 @@ def update():
         config.telegram_link_whitelist = {t.strip().lower().replace("@", "") for t in request.form.get('tg_links', '').split(',') if t.strip()}
         config.blocked_phone_prefixes = {p.strip() for p in request.form.get('phone_pre', '').split(',') if p.strip()}
         config.blocked_keywords = {k.strip() for k in request.form.get('keywords', '').split(',') if k.strip()}
-        config.add_log("SUCCESS", "🦋規則與關鍵字已更新")
-    except Exception as e: config.add_log("ERROR", f"🦋更新失敗: {e}")
+        config.add_log("SUCCESS", "🦋 規則與關鍵字已更新")
+    except Exception as e: config.add_log("ERROR", f"🦋 更新失敗: {e}")
     return redirect(url_for('index'))
 
 @app.route('/unban_member', methods=['POST'])
@@ -373,7 +373,7 @@ def unban_member():
                 
                 n_msg = await config.application.bot.send_message(chat_id=chat_id, text=f"🦋 霍格華茲解禁通知 🦋\n🦉用戶學員：{user_id}\n✅經由魔法部審判為無罪\n✅已被鄧不利多從阿茲卡班救回\n🪄請學員注意勿再違反校規", parse_mode=ParseMode.HTML)
                 await asyncio.sleep(5); await n_msg.delete()
-            except Exception as e: config.add_log("ERROR", f"🦋解封錯誤: {e}")
+            except Exception as e: config.add_log("ERROR", f"🦋 解封錯誤: {e}")
         if config.loop: asyncio.run_coroutine_threadsafe(do_unban(), config.loop)
     except: pass
     return redirect(url_for('index'))
