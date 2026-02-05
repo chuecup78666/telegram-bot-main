@@ -212,17 +212,31 @@ def contains_prohibited_content(text: str) -> Tuple[bool, Optional[str]]:
     return False, None
 
 async def unban_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat, sender = update.effective_chat, update.effective_user
+    chat, admin_sender = update.effective_chat, update.effective_user
     config.last_heartbeat = get_now_tw()
     try:
-        member = await chat.get_member(sender.id)
+        member = await chat.get_member(admin_sender.id)
         if member.status not in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]: return
-        user_id = update.message.reply_to_message.from_user.id if update.message.reply_to_message else (int(context.args[0]) if context.args else None)
+        
+        user_id = None
+        target_name = "未知用戶"
+        
+        if update.message.reply_to_message:
+            user_id = update.message.reply_to_message.from_user.id
+            target_name = update.message.reply_to_message.from_user.full_name
+        elif context.args:
+            try: 
+                user_id = int(context.args[0])
+                target_name = f"UID:{user_id}"
+            except: pass
+            
         if user_id:
             p = ChatPermissions(can_send_messages=True, can_send_audios=True, can_send_documents=True, can_send_photos=True, can_send_videos=True, can_send_video_notes=True, can_send_voice_notes=True, can_send_polls=True, can_send_other_messages=True, can_add_web_page_previews=True, can_invite_users=True, can_pin_messages=True, can_change_info=True)
             await context.bot.restrict_chat_member(chat.id, user_id, p)
             config.reset_violation(chat.id, user_id)
-            msg = await update.message.reply_text(f"✅ 🦋用戶 {user_id} 已由管理員指令手動解除阿茲卡班監禁。")
+            
+            config.add_log("SUCCESS", f"🦋 管理員在 [{chat.title}] 手動解除用戶 {target_name} 的監禁。")
+            msg = await update.message.reply_text(f"✅ 🦋用戶 {target_name} 已由管理員指令手動解除阿茲卡班監禁。")
             await asyncio.sleep(5); await msg.delete()
     except Exception as e: await update.message.reply_text(f"❌ 錯誤: {e}")
 
@@ -293,15 +307,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             v_count = config.add_violation(chat.id, user.id)
             if v_count >= config.max_violations:
                 try: await context.bot.restrict_chat_member(chat.id, user.id, permissions=ChatPermissions(can_send_messages=False))
-                except: config.add_log("WARN", "技術禁言指令失敗，改為僅記錄公告")
+                except: config.add_log("WARN", f"[{chat.title}] 技術禁言指令失敗，僅記錄公告")
+                
                 config.record_blacklist(user.id, user.full_name, chat.id, chat.title)
-                # 修正修正：改用中文書名號 《 》 避免 HTML 解析失敗
+                config.add_log("ERROR", f"🦋 用戶 {user.full_name} 在 [{chat.title}] 違規達上限，已公告封鎖並記錄黑名單")
+                
                 await context.bot.send_message(
                     chat_id=chat.id, 
-                    text=f"🦋 霍格華茲禁言通知 🦋\n\n🦉用戶學員：：{user.mention_html()}\n🈲發言已多次違反校規。\n🈲已被咒語《阿哇呾喀呾啦》擊殺⚡️\n🪄如被誤殺請待在阿茲卡班內稍等並請客服通知鄧不利多校長幫你解禁", 
+                    text=f"🦋 霍格華茲禁言通知 🦋\n\n🦉用戶學員：{user.mention_html()}\n🈲發言已多次違反校規。\n🈲已被咒語《阿哇呾喀呾啦》擊殺⚡️\n🪄如被誤殺請待在阿茲卡班內稍等並請客服通知鄧不利多校長幫你解禁", 
                     parse_mode=ParseMode.HTML
                 )
-                config.add_log("ERROR", f"🦋用戶 {user.full_name} 達上限，已公告封鎖")
             else:
                 sent_warn = await context.bot.send_message(chat.id, f"🦋 霍格華茲警告通知 🦋\n\n🦉用戶學員：{user.mention_html()}\n⚠️違反校規：{violation_reason}\n⚠️違規計次：({v_count}/{config.max_violations}\n🪄多次違規將被黑魔法教師擊殺)", parse_mode=ParseMode.HTML)
                 await asyncio.sleep(config.warning_duration); await sent_warn.delete()
@@ -342,12 +357,21 @@ def update():
 def unban_member():
     try:
         user_id, chat_id = int(request.form.get('user_id')), int(request.form.get('chat_id'))
+        
+        # 嘗試從目前的黑名單快取抓取群組名稱，讓 Log 更完整
+        key = f"{chat_id}_{user_id}"
+        chat_title = config.blacklist_members.get(key, {}).get("chat_title", f"ID: {chat_id}")
+        
         async def do_unban():
             try:
                 p = ChatPermissions(can_send_messages=True, can_send_audios=True, can_send_documents=True, can_send_photos=True, can_send_videos=True, can_send_video_notes=True, can_send_voice_notes=True, can_send_polls=True, can_send_other_messages=True, can_add_web_page_previews=True, can_invite_users=True, can_pin_messages=True, can_change_info=True)
                 await config.application.bot.restrict_chat_member(chat_id, user_id, p); await config.application.bot.unban_chat_member(chat_id, user_id, only_if_banned=True)
-                config.reset_violation(chat_id, user_id); config.add_log("SUCCESS", f"🦋成功解封用戶 {user_id}")
-                n_msg = await config.application.bot.send_message(chat_id=chat_id, text=f"🦋 霍格華茲解禁通知 🦋\n🦉用戶學員：{user.mention_html()}\n✅經由魔法部審判為無罪\n✅已被鄧不利多從阿茲卡班救回\n🪄請學員注意勿再違反校規", parse_mode=ParseMode.HTML)
+                config.reset_violation(chat_id, user_id)
+                
+                # 在 Log 紀錄中顯示地點
+                config.add_log("SUCCESS", f"🦋 管理員透過網頁解封用戶 {user_id}，地點為 [{chat_title}]。")
+                
+                n_msg = await config.application.bot.send_message(chat_id=chat_id, text=f"🦋 霍格華茲解禁通知 🦋\n🦉用戶學員：{user_id}\n✅經由魔法部審判為無罪\n✅已被鄧不利多從阿茲卡班救回\n🪄請學員注意勿再違反校規", parse_mode=ParseMode.HTML)
                 await asyncio.sleep(5); await n_msg.delete()
             except Exception as e: config.add_log("ERROR", f"🦋解封錯誤: {e}")
         if config.loop: asyncio.run_coroutine_threadsafe(do_unban(), config.loop)
@@ -404,7 +428,7 @@ DASHBOARD_HTML = """
                     </tbody></table></div>
                 </div>
                 <div class="bg-slate-800 p-6 rounded-2xl border border-slate-700 shadow-xl">
-                    <div class="flex justify-between items-center mb-4"><h3 class="text-lg font-bold text-sky-300">📝 Log 紀錄</h3><button onclick="location.reload()" class="text-[10px] text-sky-400">刷新</button></div>
+                    <div class="flex justify-between items-center mb-4"><h3 class="text-lg font-bold text-sky-300">📝 Log 紀錄</h3><button onclick="location.reload()" class="text-[10px] text-sky-400 border border-sky-400 px-2 py-0.5 rounded hover:bg-sky-400 hover:text-white transition-all">刷新</button></div>
                     <div class="terminal rounded p-2">{% for log in config.logs %}<div><span class="text-slate-500">[{{ log.time }}]</span> <span class="text-{{ 'rose-400' if log.level=='ERROR' else 'sky-400' }}">[{{ log.level }}]</span> {{ log.content }}</div>{% endfor %}</div>
                 </div>
             </div>
@@ -424,12 +448,14 @@ def run_telegram_bot():
         async def clear(): 
             try: await bot_app.bot.delete_webhook(drop_pending_updates=True)
             except: pass
-            config.add_log("INFO", "🦋Telegram 通訊連線成功")
+            config.add_log("INFO", "🦋 Telegram 通訊連線成功")
         loop.run_until_complete(clear())
         bot_app.add_handler(CommandHandler("unban", unban_handler))
         bot_app.add_handler(MessageHandler(filters.ALL & (~filters.COMMAND), handle_message))
         bot_app.run_polling(stop_signals=False, close_loop=False)
-    except Exception as e: config.add_log("ERROR", f"🦋機器人核心崩潰: {e}")
+    except Exception as e: 
+        logger.error(f"機器人崩潰: {e}")
+        config.add_log("ERROR", f"🦋 機器人核心崩潰: {e}")
 
 if __name__ == '__main__':
     tg_thread = Thread(target=run_telegram_bot, daemon=True)
