@@ -314,11 +314,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 
                 await context.bot.send_message(
                     chat_id=chat.id, 
-                    text=f"🦋 霍格華茲禁言通知 🦋\n\n🦉用戶學員：{user.mention_html()}\n🈲發言已多次違反校規。\n🈲已被咒語《阿哇呾喀呾啦》擊殺⚡️\n🪄如被誤殺請待在阿茲卡班內稍等並請客服通知鄧不利多校長幫你解禁", 
+                    text=f"🦋 <b>霍格華茲禁言通知</b> 🦋\n\n🦉用戶學員：{user.mention_html()}\n🈲發言已多次違反校規。\n🈲已被咒語《阿哇呾喀呾啦》擊殺⚡️\n🪄如被誤殺請待在阿茲卡班內稍等\n並請客服通知鄧不利多校長幫你解禁", 
                     parse_mode=ParseMode.HTML
                 )
             else:
-                sent_warn = await context.bot.send_message(chat.id, f"🦋 霍格華茲警告通知 🦋\n\n🦉用戶學員：{user.mention_html()}\n⚠️違反校規：{violation_reason}\n⚠️違規計次：({v_count}/{config.max_violations})\n🪄多次違規將被黑魔法教師擊殺", parse_mode=ParseMode.HTML)
+                sent_warn = await context.bot.send_message(chat.id, f"🦋 <b>霍格華茲警告通知</b> 🦋\n\n🦉用戶學員：{user.mention_html()}\n⚠️違反校規：{violation_reason}\n⚠️違規計次：({v_count}/{config.max_violations})\n🪄多次違規將被黑魔法教師擊殺", parse_mode=ParseMode.HTML)
                 await asyncio.sleep(config.warning_duration); await sent_warn.delete()
         except Exception as e: config.add_log("ERROR", f"🦋處理失敗: {e}")
     elif not msg.sticker:
@@ -371,7 +371,7 @@ def unban_member():
                 # 在 Log 紀錄中顯示地點
                 config.add_log("SUCCESS", f"🦋 管理員透過網頁解封用戶 {user_id}，地點為 [{chat_title}]。")
                 
-                n_msg = await config.application.bot.send_message(chat_id=chat_id, text=f"🦋 霍格華茲解禁通知 🦋\n🦉用戶學員：{user_id}\n✅經由魔法部審判為無罪\n✅已被鄧不利多從阿茲卡班救回\n🪄請學員注意勿再違反校規", parse_mode=ParseMode.HTML)
+                n_msg = await config.application.bot.send_message(chat_id=chat_id, text=f"🦋 <b>霍格華茲解禁通知</b> 🦋\n🦉用戶學員：{user_id}\n✅經由魔法部審判為無罪\n✅已被鄧不利多從阿茲卡班救回\n🪄請學員注意勿再違反校規", parse_mode=ParseMode.HTML)
                 await asyncio.sleep(5); await n_msg.delete()
             except Exception as e: config.add_log("ERROR", f"🦋 解封錯誤: {e}")
         if config.loop: asyncio.run_coroutine_threadsafe(do_unban(), config.loop)
