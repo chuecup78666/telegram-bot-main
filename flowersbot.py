@@ -298,12 +298,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 # 修正修正：改用中文書名號 《 》 避免 HTML 解析失敗
                 await context.bot.send_message(
                     chat_id=chat.id, 
-                    text=f"🚫 🦋<b>用戶禁言通知</b>🦋\n用戶：{user.mention_html()}\n原因：多次違規。\n狀態：已被咒語《阿哇呾喀呾啦》擊殺，關入阿茲卡班。", 
+                    text=f"🦋 霍格華茲禁言通知 🦋\n\n🦉用戶學員：：{user.mention_html()}\n🈲發言已多次違反校規。\n🈲已被咒語《阿哇呾喀呾啦》擊殺⚡️\n🪄如被誤殺請待在阿茲卡班內稍等並請客服通知鄧不利多校長幫你解禁", 
                     parse_mode=ParseMode.HTML
                 )
                 config.add_log("ERROR", f"🦋用戶 {user.full_name} 達上限，已公告封鎖")
             else:
-                sent_warn = await context.bot.send_message(chat.id, f"⚠️ 🦋 <b>自動審查通知</b> 🦋\n用戶：{user.mention_html()}\n違反霍格華茲校規：{violation_reason}\n違規計次：({v_count}/{config.max_violations})", parse_mode=ParseMode.HTML)
+                sent_warn = await context.bot.send_message(chat.id, f"🦋 霍格華茲警告通知 🦋\n\n🦉用戶學員：{user.mention_html()}\n⚠️違反校規：{violation_reason}\n⚠️違規計次：({v_count}/{config.max_violations}\n🪄多次違規將被黑魔法教師擊殺)", parse_mode=ParseMode.HTML)
                 await asyncio.sleep(config.warning_duration); await sent_warn.delete()
         except Exception as e: config.add_log("ERROR", f"🦋處理失敗: {e}")
     elif not msg.sticker:
@@ -347,7 +347,7 @@ def unban_member():
                 p = ChatPermissions(can_send_messages=True, can_send_audios=True, can_send_documents=True, can_send_photos=True, can_send_videos=True, can_send_video_notes=True, can_send_voice_notes=True, can_send_polls=True, can_send_other_messages=True, can_add_web_page_previews=True, can_invite_users=True, can_pin_messages=True, can_change_info=True)
                 await config.application.bot.restrict_chat_member(chat_id, user_id, p); await config.application.bot.unban_chat_member(chat_id, user_id, only_if_banned=True)
                 config.reset_violation(chat_id, user_id); config.add_log("SUCCESS", f"🦋成功解封用戶 {user_id}")
-                n_msg = await config.application.bot.send_message(chat_id=chat_id, text=f"✅ 🦋 <b>後台解封通知</b> 🦋\n用戶 <code>{user_id}</code> 已被解除阿茲卡班監禁。", parse_mode=ParseMode.HTML)
+                n_msg = await config.application.bot.send_message(chat_id=chat_id, text=f"🦋 霍格華茲解禁通知 🦋\n🦉用戶學員：{user.mention_html()}\n✅經由魔法部審判為無罪\n✅已被鄧不利多從阿茲卡班救回\n🪄請學員注意勿再違反校規", parse_mode=ParseMode.HTML)
                 await asyncio.sleep(5); await n_msg.delete()
             except Exception as e: config.add_log("ERROR", f"🦋解封錯誤: {e}")
         if config.loop: asyncio.run_coroutine_threadsafe(do_unban(), config.loop)
@@ -378,7 +378,7 @@ DASHBOARD_HTML = """
         <div class="grid grid-cols-1 lg:grid-cols-12 gap-8">
             <div class="lg:col-span-4 space-y-6">
                 <div class="bg-slate-800 p-6 rounded-2xl border border-slate-700 shadow-xl">
-                    <h3 class="text-lg font-bold mb-4 text-sky-300">⚙️ 規則調整</h3>
+                    <h3 class="text-lg font-bold mb-4 text-sky-300">🦉 霍格華茲校規更新</h3>
                     <form action="/update" method="POST" class="space-y-4">
                         <div class="grid grid-cols-2 gap-4">
                             <div><label class="block text-[10px] text-slate-400">警告停留(秒)</label><input type="number" name="duration" value="{{ config.warning_duration }}" class="w-full bg-slate-700 rounded p-1 text-sm text-white outline-none"></div>
@@ -394,7 +394,7 @@ DASHBOARD_HTML = """
             </div>
             <div class="lg:col-span-8 space-y-6">
                 <div class="bg-slate-800 p-6 rounded-2xl border border-slate-700 shadow-xl">
-                    <h3 class="text-lg font-bold text-rose-400 mb-4">🚫 被封鎖成員 (24H)</h3>
+                    <h3 class="text-lg font-bold text-rose-400 mb-4">🚫 阿茲卡班監獄(24H)</h3>
                     <div class="flex flex-wrap gap-2 mb-4">
                         <a href="/" class="px-2 py-1 text-[10px] rounded {{ 'bg-sky-600 text-white' if not active_filter else 'bg-slate-700 text-slate-400' }}">全部</a>
                         {% for cid, ctitle in filter_chats.items() %}<a href="/?filter_chat_id={{ cid }}" class="px-2 py-1 text-[10px] rounded {{ 'bg-sky-600 text-white' if active_filter == cid else 'bg-slate-700 text-slate-400' }}">{{ ctitle }}</a>{% endfor %}
