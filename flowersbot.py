@@ -375,7 +375,7 @@ def unban_member():
                 # Log 強化：顯示地點
                 config.add_log("SUCCESS", f"🦋 管理員透過網頁解封學員 {user_id}，地點為 [{chat_title}]。")
                 
-                n_msg = await config.application.bot.send_message(chat_id=chat_id, text=f"🦋 <b>霍格華茲解禁通知</b> 🦋\n🦉用戶學員：{user_id}\n✅經由魔法部審判為無罪\n✅已被鄧不利多從阿茲卡班救回\n🪄請學員注意勿再違反校規", parse_mode=ParseMode.HTML)
+                n_msg = await config.application.bot.send_message(chat_id=chat_id, text=f"🦋 <b>霍格華茲解禁通知</b> 🦋\n🦉用戶學員：{user.mention_html()}\n✅經由魔法部審判為無罪\n✅已被鄧不利多從阿茲卡班救回\n🪄<b>請學員注意勿再違反校規</b>", parse_mode=ParseMode.HTML)
                 await asyncio.sleep(5); await n_msg.delete()
             except Exception as e: config.add_log("ERROR", f"🦋 解封錯誤: {e}")
         if config.loop: asyncio.run_coroutine_threadsafe(do_unban(), config.loop)
