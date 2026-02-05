@@ -110,7 +110,7 @@ class BotConfig:
         self.max_violations = 3
         self.allowed_domains = {"google.com", "wikipedia.org", "telegram.org", "t.me", "facebook.com", "github.com"}
         self.sticker_whitelist = {"ecup78_bot", "ecup78"}
-        self.telegram_link_whitelist = {"ecup78", "ttt3388"}
+        self.telegram_link_whitelist = {"ecup78", "ttt3388", "Sanchong168", "Xinzhuang168", "Taishanwugu168", "Zhonghe168", "Tucheng_168", "Linkou168", "Keelung168"}
         self.blocked_phone_prefixes = {"+91", "+84", "+63", "+1"}
         self.blocked_keywords = {"假鈔", "假钞"}
         
