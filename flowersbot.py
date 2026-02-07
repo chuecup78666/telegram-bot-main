@@ -116,7 +116,7 @@ class BotConfig:
             "portaly.cc", "ttt3388.com.tw", "webnode.tw"
         }
         
-        # Telegram ID 白名單 (預設均存為小寫以利比對)
+        # Telegram ID 白名單
         self.telegram_link_whitelist = {
             "ecup78", "ttt3388", "setlanguage", "ecup788_lulu156", 
             "ecup788_hhaa555", "lulu156_ecup788", "flower_5555", 
@@ -126,7 +126,7 @@ class BotConfig:
             "zhonghe168", "tucheng_168", "linkou168", "keelung168"
         }
         
-        # 貼圖 ID 白名單 (預設均存為小寫以利比對)
+        # 貼圖 ID 白名單 (全小寫存儲)
         self.sticker_whitelist = {"ecup78_bot", "ecup78"}
         
         self.blocked_phone_prefixes = {"+91", "+84", "+63", "+1"}
@@ -286,27 +286,25 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if any(phone.startswith(pre) for pre in config.blocked_phone_prefixes):
             violation_reason = f"來自受限國家門號 ({phone[:3]}...)"
             
-    # 貼圖偵測 (大小寫全自動轉小寫比對)
+    # 貼圖偵測 (大小寫忽略)
     if msg.sticker:
         try:
             s_set = await context.bot.get_sticker_set(msg.sticker.set_name)
-            # 將標題與包名全部轉小寫
             combined_lower = (s_set.title + msg.sticker.set_name).lower()
             if ("@" in combined_lower or "_by_" in combined_lower):
-                # 白名單比對 (whitelist 已經在儲存時轉為小寫)
                 if not any(wd in combined_lower for wd in config.sticker_whitelist):
                     safe_title = s_set.title.replace("@", "")
                     violation_reason = f"貼圖包含未授權 ID ({safe_title})"
             else: all_texts.append(s_set.title)
         except: pass
 
-    # 內容偵測
+    # 內容關鍵字偵測
     if not violation_reason:
         for text in all_texts:
             is_bad, reason = contains_prohibited_content(text)
             if is_bad: violation_reason = reason; break
 
-    # 連結偵測
+    # 連結檢查
     if not violation_reason:
         ents = list(msg.entities or []) + list(msg.caption_entities or [])
         for ent in ents:
@@ -366,11 +364,13 @@ def update():
         config.max_violations = int(request.form.get('max_v', 6))
         config.allowed_domains = {d.strip().lower() for d in request.form.get('domains', '').split(',') if d.strip()}
         config.telegram_link_whitelist = {t.strip().lower().replace("@", "") for t in request.form.get('tg_links', '').split(',') if t.strip()}
+        # 補回：電話開頭黑名單
         config.blocked_phone_prefixes = {p.strip() for p in request.form.get('phone_pre', '').split(',') if p.strip()}
+        # 補回：攔截關鍵字
         config.blocked_keywords = {k.strip() for k in request.form.get('keywords', '').split(',') if k.strip()}
-        # 關鍵更新：將所有輸入的貼圖 ID 強制轉為小寫存儲
+        # 貼圖 ID 自動小寫校正
         config.sticker_whitelist = {s.strip().lower().replace("@", "") for s in request.form.get('sticker_ws', '').split(',') if s.strip()}
-        config.add_log("SUCCESS", "🦋 設定已同步更新 (含大小寫校正)")
+        config.add_log("SUCCESS", "🦋 所有校規設定已同步更新")
     except Exception as e: config.add_log("ERROR", f"🦋 更新失敗: {e}")
     return redirect(url_for('index'))
 
@@ -399,7 +399,7 @@ DASHBOARD_HTML = """
 <!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
-    <meta charset="UTF-8"><title>花利氵皮特🦋管理後台</title>
+    <meta charset="UTF-8"><title>花家霍格華茲·石內卜教授🦋管理後台</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <style>.terminal { background-color: #0f172a; height: 400px; overflow-y: auto; font-size: 11px; }</style>
@@ -407,7 +407,7 @@ DASHBOARD_HTML = """
 <body class="bg-slate-900 text-slate-100 min-h-screen font-sans p-6">
     <div class="max-w-7xl mx-auto">
         <header class="flex justify-between items-center border-b border-slate-700 pb-6 mb-8">
-            <h1 class="text-3xl font-bold text-sky-400">花利氵皮特🦋管理後台</h1>
+            <h1 class="text-3xl font-bold text-sky-400">花家霍格華茲·石內卜教授🦋管理後台</h1>
             <span class="px-3 py-1 rounded-full text-xs {{ 'bg-emerald-500/20 text-emerald-400' if is_active else 'bg-rose-500/20 text-rose-400' }}">
                 {{ '● 機器人運行中' if is_active else '● 機器人未啟動' }}
             </span>
@@ -419,16 +419,18 @@ DASHBOARD_HTML = """
         <div class="grid grid-cols-1 lg:grid-cols-12 gap-8">
             <div class="lg:col-span-4 space-y-6">
                 <div class="bg-slate-800 p-6 rounded-2xl border border-slate-700 shadow-xl">
-                    <h3 class="text-lg font-bold mb-4 text-sky-300">🦉 校規設定</h3>
+                    <h3 class="text-lg font-bold mb-4 text-sky-300">🦉 霍格華茲校規設定</h3>
                     <form action="/update" method="POST" class="space-y-4">
                         <div class="grid grid-cols-2 gap-4">
                             <div><label class="block text-[10px] text-slate-400">警告停留(秒)</label><input type="number" name="duration" value="{{ config.warning_duration }}" class="w-full bg-slate-700 rounded p-1 text-sm text-white outline-none"></div>
                             <div><label class="block text-[10px] text-slate-400">違規上限(次)</label><input type="number" name="max_v" value="{{ config.max_violations }}" class="w-full bg-slate-700 rounded p-1 text-sm text-white outline-none"></div>
                         </div>
-                        <div><label class="block text-[10px] text-slate-400">網域白名單 (大小寫不拘)</label><textarea name="domains" rows="2" class="w-full bg-slate-700 rounded p-1 text-[10px] text-white outline-none">{{ config.allowed_domains | join(', ') }}</textarea></div>
-                        <div><label class="block text-[10px] text-slate-400">TG ID 白名單 (大小寫不拘)</label><textarea name="tg_links" rows="3" class="w-full bg-slate-700 rounded p-1 text-[10px] text-white outline-none">{{ config.telegram_link_whitelist | join(', ') }}</textarea></div>
-                        <div><label class="block text-[10px] text-slate-400 font-bold">貼圖 ID 白名單 (自動轉換大小寫)</label><textarea name="sticker_ws" rows="1" class="w-full bg-slate-700 rounded p-1 text-[10px] text-white outline-none">{{ config.sticker_whitelist | join(', ') }}</textarea></div>
-                        <button type="submit" class="w-full bg-sky-600 hover:bg-sky-500 py-2 rounded-xl font-bold text-sm text-white transition-all">同步設定</button>
+                        <div><label class="block text-[10px] text-slate-400 text-rose-400">電話開頭黑名單 (+號開頭)</label><textarea name="phone_pre" rows="1" class="w-full bg-slate-700 rounded p-1 text-[10px] text-white outline-none">{{ config.blocked_phone_prefixes | join(', ') }}</textarea></div>
+                        <div><label class="block text-[10px] text-slate-400 text-rose-400">攔截關鍵字 (逗號隔開)</label><textarea name="keywords" rows="1" class="w-full bg-slate-700 rounded p-1 text-[10px] text-white outline-none">{{ config.blocked_keywords | join(', ') }}</textarea></div>
+                        <div><label class="block text-[10px] text-slate-400">網域白名單</label><textarea name="domains" rows="2" class="w-full bg-slate-700 rounded p-1 text-[10px] text-white outline-none">{{ config.allowed_domains | join(', ') }}</textarea></div>
+                        <div><label class="block text-[10px] text-slate-400">TG ID 白名單</label><textarea name="tg_links" rows="2" class="w-full bg-slate-700 rounded p-1 text-[10px] text-white outline-none">{{ config.telegram_link_whitelist | join(', ') }}</textarea></div>
+                        <div><label class="block text-[10px] text-slate-400 font-bold">貼圖 ID 白名單</label><textarea name="sticker_ws" rows="1" class="w-full bg-slate-700 rounded p-1 text-[10px] text-white outline-none">{{ config.sticker_whitelist | join(', ') }}</textarea></div>
+                        <button type="submit" class="w-full bg-sky-600 hover:bg-sky-500 py-2 rounded-xl font-bold text-sm text-white transition-all">同步校規設定</button>
                     </form>
                 </div>
             </div>
@@ -444,7 +446,7 @@ DASHBOARD_HTML = """
                     </tbody></table></div>
                 </div>
                 <div class="bg-slate-800 p-6 rounded-2xl border border-slate-700 shadow-xl">
-                    <h3 class="text-lg font-bold text-sky-300 mb-4">📝 Log 紀錄</h3>
+                    <h3 class="text-lg font-bold text-sky-300 mb-4">📝 LOG與學員違規紀錄</h3>
                     <div class="terminal rounded p-2">{% for log in config.logs %}<div><span class="text-slate-500">[{{ log.time }}]</span> <span class="text-{{ 'rose-400' if log.level=='ERROR' else 'sky-400' }}">[{{ log.level }}]</span> {{ log.content }}</div>{% endfor %}</div>
                 </div>
             </div>
