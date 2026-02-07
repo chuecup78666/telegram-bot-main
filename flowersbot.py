@@ -108,10 +108,28 @@ class BotConfig:
         # 預設規則
         self.warning_duration = 5
         self.max_violations = 3
-        self.allowed_domains = {"google.com", "wikipedia.org", "telegram.org", "t.me", "facebook.com", "github.com"}
+        
+        # 網域白名單
+        self.allowed_domains = {
+            "google.com", "wikipedia.org", "telegram.org", "t.me", 
+            "facebook.com", "github.com", "blogspot.com", "line.me", 
+            "portaly.cc", "ttt3388.com.tw", "webnode.tw"
+        }
+        
+        # Telegram ID 白名單 (預設均存為小寫以利比對)
+        self.telegram_link_whitelist = {
+            "ecup78", "ttt3388", "setlanguage", "ecup788_lulu156", 
+            "ecup788_hhaa555", "lulu156_ecup788", "flower_5555", 
+            "ecup78_1", "ii17225278", "sexy_ttt3388", "line527817ii", 
+            "tmdgan2_0", "ttt3388sex", "ii1722", "taiwan",
+            "sanchong168", "xinzhuang168", "taishanwugu168", 
+            "zhonghe168", "tucheng_168", "linkou168", "keelung168"
+        }
+        
+        # 貼圖 ID 白名單 (預設均存為小寫以利比對)
         self.sticker_whitelist = {"ecup78_bot", "ecup78"}
-        self.telegram_link_whitelist = {"ecup78", "ttt3388", "Sanchong168", "Xinzhuang168", "Taishanwugu168", "Zhonghe168", "Tucheng_168", "Linkou168", "Keelung168"}
-        self.blocked_phone_prefixes = {"+91", "+84", "+63", "+1", "+76"}
+        
+        self.blocked_phone_prefixes = {"+91", "+84", "+63", "+1"}
         self.blocked_keywords = {"假鈔", "假钞"}
         
         self.violation_tracker: Dict[Tuple[int, int], Dict] = {}
@@ -246,16 +264,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user, chat, mgid = msg.from_user, msg.chat, msg.media_group_id
     if not user or user.is_bot: return
 
-    # --- 新增：管理員豁免邏輯 ---
+    # 管理員豁免
     try:
-        # 如果是私聊，直接跳過權限檢查
         if chat.type != "private":
             chat_member = await chat.get_member(user.id)
-            if chat_member.status in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]:
-                # 管理員發言完全不檢查，直接結束此函式
-                return 
-    except Exception as e:
-        logger.warning(f"檢查管理員權限時出錯: {e}")
+            if chat_member.status in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]: return 
+    except: pass
 
     if mgid and mgid in config.flagged_media_groups:
         try: await msg.delete(); return
@@ -263,40 +277,36 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     all_texts: List[str] = []
     violation_reason: Optional[str] = None
-    msg_type_tag = "訊息"
     if msg.text: all_texts.append(msg.text)
     if msg.caption: all_texts.append(msg.caption)
+    
+    # 聯絡人偵測
     if msg.contact:
-        msg_type_tag = "聯絡著名片"
         phone = msg.contact.phone_number or ""
-        if msg.contact.first_name: all_texts.append(msg.contact.first_name)
-        if msg.contact.last_name: all_texts.append(msg.contact.last_name)
         if any(phone.startswith(pre) for pre in config.blocked_phone_prefixes):
             violation_reason = f"來自受限國家門號 ({phone[:3]}...)"
-    if msg.venue:
-        msg_type_tag = "地點"
-        if msg.venue.title: all_texts.append(msg.venue.title)
-        if msg.venue.address: all_texts.append(msg.venue.address)
+            
+    # 貼圖偵測 (大小寫全自動轉小寫比對)
     if msg.sticker:
-        msg_type_tag = "貼圖"
         try:
             s_set = await context.bot.get_sticker_set(msg.sticker.set_name)
-            combined = (s_set.title + msg.sticker.set_name).lower()
-            if ("@" in combined or "_by_" in combined) and not any(wd.replace("@","").lower() in combined for wd in config.sticker_whitelist):
-                safe_title = s_set.title.replace("@", "")
-                violation_reason = f"貼圖包含未授權 ID ({safe_title})"
+            # 將標題與包名全部轉小寫
+            combined_lower = (s_set.title + msg.sticker.set_name).lower()
+            if ("@" in combined_lower or "_by_" in combined_lower):
+                # 白名單比對 (whitelist 已經在儲存時轉為小寫)
+                if not any(wd in combined_lower for wd in config.sticker_whitelist):
+                    safe_title = s_set.title.replace("@", "")
+                    violation_reason = f"貼圖包含未授權 ID ({safe_title})"
             else: all_texts.append(s_set.title)
         except: pass
-    if msg.forward_origin:
-        origin = msg.forward_origin
-        if hasattr(origin, 'chat') and origin.chat and getattr(origin.chat, 'title', None): all_texts.append(origin.chat.title)
-        if hasattr(origin, 'sender_user') and origin.sender_user and getattr(origin.sender_user, 'full_name', None): all_texts.append(origin.sender_user.full_name)
 
+    # 內容偵測
     if not violation_reason:
         for text in all_texts:
             is_bad, reason = contains_prohibited_content(text)
             if is_bad: violation_reason = reason; break
 
+    # 連結偵測
     if not violation_reason:
         ents = list(msg.entities or []) + list(msg.caption_entities or [])
         for ent in ents:
@@ -307,8 +317,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     violation_reason = "含有不明連結"; break
                 ext = tldextract.extract(url_clean)
                 if ext.registered_domain in ["t.me", "telegram.me", "telegram.dog"]:
-                    path = url_clean.split('t.me/')[-1] if 't.me/' in url_clean else url_clean.split('/')[-1]
-                    link_id = path.split('/')[0].split('?')[0].replace("@", "")
+                    path_part = url_clean.split('t.me/')[-1] if 't.me/' in url_clean else url_clean.split('/')[-1]
+                    link_id = path_part.split('/')[0].split('?')[0].replace("@", "")
                     if link_id and not any(wl.strip().lower() in link_id for wl in config.telegram_link_whitelist):
                         violation_reason = f"未授權的 Telegram 連結 ({link_id})"; break
 
@@ -316,13 +326,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if mgid: config.flagged_media_groups[mgid] = datetime.now()
         try:
             try: await msg.delete(); config.total_deleted_count += 1
-            except: logger.warning(f"無法刪除用戶 {user.id} 的訊息")
+            except: pass
             v_count = config.add_violation(chat.id, user.id)
             if v_count >= config.max_violations:
                 try: await context.bot.restrict_chat_member(chat.id, user.id, permissions=ChatPermissions(can_send_messages=False))
-                except: config.add_log("WARN", f"[{chat.title}] 技術禁言指令失敗，僅記錄公告")
+                except: config.add_log("WARN", f"[{chat.title}] 技術禁言失敗")
                 config.record_blacklist(user.id, user.full_name, chat.id, chat.title)
-                config.add_log("ERROR", f"🦋 用戶 {user.full_name} 在 [{chat.title}] 違規達上限，已公告封鎖並記錄黑名單")
+                config.add_log("ERROR", f"🦋 用戶 {user.full_name} 在 [{chat.title}] 違規達上限封鎖")
                 await context.bot.send_message(
                     chat_id=chat.id, 
                     text=f"🦋 <b>霍格華茲禁言通知</b> 🦋\n\n🦉用戶學員：{user.mention_html()}\n🈲發言已多次違反校規。\n🈲已被咒語《阿哇呾喀呾啦》擊殺⚡️\n🪄<b>如被誤殺請待在阿茲卡班內稍等\n並請客服通知鄧不利多校長幫你解禁</b>", 
@@ -347,8 +357,7 @@ def index():
         members = config.get_recent_blacklist(filter_cid)
         filter_chats = config.get_blacklist_chats()
         return render_template_string(DASHBOARD_HTML, config=config, is_active=is_active, members=members, filter_chats=filter_chats, active_filter=filter_cid)
-    except Exception as e:
-        return f"<h1>500 Internal Server Error</h1><p>原因：{e}</p>", 500
+    except Exception as e: return f"Error: {e}", 500
 
 @app.route('/update', methods=['POST'])
 def update():
@@ -359,8 +368,9 @@ def update():
         config.telegram_link_whitelist = {t.strip().lower().replace("@", "") for t in request.form.get('tg_links', '').split(',') if t.strip()}
         config.blocked_phone_prefixes = {p.strip() for p in request.form.get('phone_pre', '').split(',') if p.strip()}
         config.blocked_keywords = {k.strip() for k in request.form.get('keywords', '').split(',') if k.strip()}
+        # 關鍵更新：將所有輸入的貼圖 ID 強制轉為小寫存儲
         config.sticker_whitelist = {s.strip().lower().replace("@", "") for s in request.form.get('sticker_ws', '').split(',') if s.strip()}
-        config.add_log("SUCCESS", "🦋 規則與白名單已更新")
+        config.add_log("SUCCESS", "🦋 設定已同步更新 (含大小寫校正)")
     except Exception as e: config.add_log("ERROR", f"🦋 更新失敗: {e}")
     return redirect(url_for('index'))
 
@@ -370,7 +380,6 @@ def unban_member():
         user_id, chat_id = int(request.form.get('user_id')), int(request.form.get('chat_id'))
         key = f"{chat_id}_{user_id}"
         member_data = config.blacklist_members.get(key, {})
-        chat_title = member_data.get("chat_title", f"ID: {chat_id}")
         user_name = member_data.get("name", f"學員 {user_id}")
         mention = f'<a href="tg://user?id={user_id}">{user_name}</a>'
         async def do_unban():
@@ -378,10 +387,10 @@ def unban_member():
                 p = ChatPermissions(can_send_messages=True, can_send_audios=True, can_send_documents=True, can_send_photos=True, can_send_videos=True, can_send_video_notes=True, can_send_voice_notes=True, can_send_polls=True, can_send_other_messages=True, can_add_web_page_previews=True, can_invite_users=True, can_pin_messages=True, can_change_info=True)
                 await config.application.bot.restrict_chat_member(chat_id, user_id, p); await config.application.bot.unban_chat_member(chat_id, user_id, only_if_banned=True)
                 config.reset_violation(chat_id, user_id)
-                config.add_log("SUCCESS", f"🦋 管理員透過網頁解封 {user_name} ({user_id})，地點為 [{chat_title}]。")
+                config.add_log("SUCCESS", f"🦋 網頁解封 {user_name}，地點 [{member_data.get('chat_title')}]")
                 n_msg = await config.application.bot.send_message(chat_id=chat_id, text=f"🦋 <b>霍格華茲解禁通知</b> 🦋\n🦉用戶學員：{mention}\n✅經由魔法部審判為無罪\n✅已被鄧不利多從阿茲卡班救回\n🪄<b>請學員注意勿再違反校規</b>", parse_mode=ParseMode.HTML)
                 await asyncio.sleep(5); await n_msg.delete()
-            except Exception as e: config.add_log("ERROR", f"🦋 解封錯誤: {e}")
+            except Exception as e: config.add_log("ERROR", f"🦋 解封失敗: {e}")
         if config.loop: asyncio.run_coroutine_threadsafe(do_unban(), config.loop)
     except: pass
     return redirect(url_for('index'))
@@ -400,7 +409,7 @@ DASHBOARD_HTML = """
         <header class="flex justify-between items-center border-b border-slate-700 pb-6 mb-8">
             <h1 class="text-3xl font-bold text-sky-400">花利氵皮特🦋管理後台</h1>
             <span class="px-3 py-1 rounded-full text-xs {{ 'bg-emerald-500/20 text-emerald-400' if is_active else 'bg-rose-500/20 text-rose-400' }}">
-                {{ '● 機器人運行中' if is_active else '● 機器人未啟動 (檢查 Token)' }}
+                {{ '● 機器人運行中' if is_active else '● 機器人未啟動' }}
             </span>
         </header>
         <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8 text-center">
@@ -410,34 +419,32 @@ DASHBOARD_HTML = """
         <div class="grid grid-cols-1 lg:grid-cols-12 gap-8">
             <div class="lg:col-span-4 space-y-6">
                 <div class="bg-slate-800 p-6 rounded-2xl border border-slate-700 shadow-xl">
-                    <h3 class="text-lg font-bold mb-4 text-sky-300">🦉 霍格華茲校規更新</h3>
+                    <h3 class="text-lg font-bold mb-4 text-sky-300">🦉 校規設定</h3>
                     <form action="/update" method="POST" class="space-y-4">
                         <div class="grid grid-cols-2 gap-4">
                             <div><label class="block text-[10px] text-slate-400">警告停留(秒)</label><input type="number" name="duration" value="{{ config.warning_duration }}" class="w-full bg-slate-700 rounded p-1 text-sm text-white outline-none"></div>
                             <div><label class="block text-[10px] text-slate-400">違規上限(次)</label><input type="number" name="max_v" value="{{ config.max_violations }}" class="w-full bg-slate-700 rounded p-1 text-sm text-white outline-none"></div>
                         </div>
-                        <div><label class="block text-[10px] text-slate-400 text-rose-400">電話開頭黑名單</label><textarea name="phone_pre" rows="1" class="w-full bg-slate-700 rounded p-1 text-xs text-white outline-none">{{ config.blocked_phone_prefixes | join(', ') }}</textarea></div>
-                        <div><label class="block text-[10px] text-slate-400 text-rose-400">攔截關鍵字</label><textarea name="keywords" rows="1" class="w-full bg-slate-700 rounded p-1 text-xs text-white outline-none">{{ config.blocked_keywords | join(', ') }}</textarea></div>
-                        <div><label class="block text-[10px] text-slate-400 text-rose-400 font-bold">貼圖 ID 白名單</label><textarea name="sticker_ws" rows="1" class="w-full bg-slate-700 rounded p-1 text-xs text-white outline-none">{{ config.sticker_whitelist | join(', ') }}</textarea></div>
-                        <div><label class="block text-[10px] text-slate-400">網域白名單</label><textarea name="domains" rows="1" class="w-full bg-slate-700 rounded p-1 text-xs text-white outline-none">{{ config.allowed_domains | join(', ') }}</textarea></div>
-                        <div><label class="block text-[10px] text-slate-400">TG 連結白名單</label><textarea name="tg_links" rows="1" class="w-full bg-slate-700 rounded p-1 text-xs text-white outline-none">{{ config.telegram_link_whitelist | join(', ') }}</textarea></div>
-                        <button type="submit" class="w-full bg-sky-600 hover:bg-sky-500 py-2 rounded-xl font-bold text-sm text-white transition-all">儲存設定</button>
+                        <div><label class="block text-[10px] text-slate-400">網域白名單 (大小寫不拘)</label><textarea name="domains" rows="2" class="w-full bg-slate-700 rounded p-1 text-[10px] text-white outline-none">{{ config.allowed_domains | join(', ') }}</textarea></div>
+                        <div><label class="block text-[10px] text-slate-400">TG ID 白名單 (大小寫不拘)</label><textarea name="tg_links" rows="3" class="w-full bg-slate-700 rounded p-1 text-[10px] text-white outline-none">{{ config.telegram_link_whitelist | join(', ') }}</textarea></div>
+                        <div><label class="block text-[10px] text-slate-400 font-bold">貼圖 ID 白名單 (自動轉換大小寫)</label><textarea name="sticker_ws" rows="1" class="w-full bg-slate-700 rounded p-1 text-[10px] text-white outline-none">{{ config.sticker_whitelist | join(', ') }}</textarea></div>
+                        <button type="submit" class="w-full bg-sky-600 hover:bg-sky-500 py-2 rounded-xl font-bold text-sm text-white transition-all">同步設定</button>
                     </form>
                 </div>
             </div>
             <div class="lg:col-span-8 space-y-6">
                 <div class="bg-slate-800 p-6 rounded-2xl border border-slate-700 shadow-xl">
-                    <h3 class="text-lg font-bold text-rose-400 mb-4">🚫 阿茲卡班監獄(24H)</h3>
+                    <h3 class="text-lg font-bold text-rose-400 mb-4">🚫 阿茲卡班監獄 (24H)</h3>
                     <div class="flex flex-wrap gap-2 mb-4">
                         <a href="/" class="px-2 py-1 text-[10px] rounded {{ 'bg-sky-600 text-white' if not active_filter else 'bg-slate-700 text-slate-400' }}">全部</a>
-                        {% for cid, ctitle in filter_chats.items() %}<a href="/?filter_chat_id={{ cid }}" class="px-2 py-1 text-[10px] rounded {{ 'bg-sky-600 text-white' if active_filter == cid else 'bg-slate-700 text-slate-400' }}">{{ ctitle }}</a>{% endfor %}
+                        {% for cid, ctitle in filter_chats.items() %}<a href="/?filter_chat_id={{ cid }}" class="px-2 py-1 text-[10px] rounded {{ 'bg-sky-600 text-white' if active_filter == cid else 'bg-slate-700 text-slate-400' }} text-ellipsis overflow-hidden">{{ ctitle }}</a>{% endfor %}
                     </div>
-                    <div class="overflow-x-auto"><table class="w-full text-left text-xs"><tbody class="divide-y divide-slate-700">
-                        {% for m in members %}<tr><td class="py-2"><b>{{ m.name }}</b><br><span class="text-slate-500">{{ m.uid }}</span></td><td class="py-2"><span class="bg-slate-700 px-1 rounded">{{ m.chat_title }}</span></td><td class="py-2 text-slate-400">{{ m.time.strftime('%m/%d %H:%M') if m.time and m.time.strftime else '未知' }}</td><td class="py-2 text-right"><form action="/unban_member" method="POST"><input type="hidden" name="user_id" value="{{ m.uid }}"><input type="hidden" name="chat_id" value="{{ m.chat_id }}"><button type="submit" class="bg-emerald-600/20 text-emerald-400 border border-emerald-600/30 px-2 py-1 rounded hover:bg-emerald-600 hover:text-white transition-all">解封</button></form></td></tr>{% endfor %}
+                    <div class="overflow-x-auto terminal"><table class="w-full text-left text-[11px]"><tbody class="divide-y divide-slate-700">
+                        {% for m in members %}<tr><td class="py-2"><b>{{ m.name }}</b></td><td class="py-2"><span class="bg-slate-700 px-1 rounded">{{ m.chat_title }}</span></td><td class="py-2 text-slate-400">{{ m.time.strftime('%H:%M') }}</td><td class="py-2 text-right"><form action="/unban_member" method="POST"><input type="hidden" name="user_id" value="{{ m.uid }}"><input type="hidden" name="chat_id" value="{{ m.chat_id }}"><button type="submit" class="bg-emerald-600/20 text-emerald-400 border border-emerald-600/30 px-2 py-0.5 rounded text-[10px]">解封</button></form></td></tr>{% endfor %}
                     </tbody></table></div>
                 </div>
                 <div class="bg-slate-800 p-6 rounded-2xl border border-slate-700 shadow-xl">
-                    <div class="flex justify-between items-center mb-4"><h3 class="text-lg font-bold text-sky-300">📝 Log 紀錄</h3><button onclick="location.reload()" class="text-[10px] text-sky-400 border border-sky-400 px-2 py-0.5 rounded hover:bg-sky-400 hover:text-white transition-all">刷新</button></div>
+                    <h3 class="text-lg font-bold text-sky-300 mb-4">📝 Log 紀錄</h3>
                     <div class="terminal rounded p-2">{% for log in config.logs %}<div><span class="text-slate-500">[{{ log.time }}]</span> <span class="text-{{ 'rose-400' if log.level=='ERROR' else 'sky-400' }}">[{{ log.level }}]</span> {{ log.content }}</div>{% endfor %}</div>
                 </div>
             </div>
@@ -462,13 +469,9 @@ def run_telegram_bot():
         bot_app.add_handler(CommandHandler("unban", unban_handler))
         bot_app.add_handler(MessageHandler(filters.ALL & (~filters.COMMAND), handle_message))
         bot_app.run_polling(stop_signals=False, close_loop=False)
-    except Exception as e: 
-        logger.error(f"機器人崩潰: {e}")
-        config.add_log("ERROR", f"🦋 機器人核心崩潰: {e}")
+    except Exception as e: config.add_log("ERROR", f"🦋 核心崩潰: {e}")
 
 if __name__ == '__main__':
     tg_thread = Thread(target=run_telegram_bot, daemon=True)
     tg_thread.start()
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host='0.0.0.0', port=port)
-
+    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 10000)))
