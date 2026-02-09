@@ -128,7 +128,7 @@ class BotConfig:
         
         # 貼圖 ID 白名單 (全小寫存儲)
         self.sticker_whitelist = {"ecup78_bot", "ecup78"}
-        self.blocked_phone_prefixes = {"+91", "+86", "+95", "+852", "+84", "+63", "+1"}
+        self.blocked_phone_prefixes = {"+91", "+86", "+95", "+852", "+60", "+84", "+63", "+1"}
         
         # 新增：針對截圖中詐騙訊息與轉傳來源的關鍵字
         self.blocked_keywords = {"假钞", "捡钱", "项目"}
