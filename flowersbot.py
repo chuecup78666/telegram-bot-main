@@ -432,7 +432,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except: pass
     elif not msg.sticker:
         full_content_log = " | ".join(all_texts)
-        config.add_log("INFO", f"接受自[{chat.title}] - [{user.first_name}] 全文掃描: {full_content_log[:50]}...")
+        config.add_log("INFO", f"接受自[{chat.title}]-[{user.first_name}] 全文掃描: {full_content_log[:50]}...")
 
 # --- 5. Flask 後台管理網頁 ---
 app = Flask(__name__)
