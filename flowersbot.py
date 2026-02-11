@@ -132,28 +132,34 @@ class BotConfig:
         }
         
         self.sticker_whitelist = {"ecup78_bot", "ecup78"}
-        self.blocked_phone_prefixes = {
-            "+91", "+95", "+60", "+62", "+855", "+84", "+44", "+86", "+41"
-        }
+        self.blocked_phone_prefixes = {"+91", "+86", "+95", "+852", "+60", "+84", "+63", "+1", "+62", "+41", "+44", "+855"}
         
+        # 強化：海量詐騙與色情關鍵字庫
         self.blocked_keywords = {
-            "假钞", "捡钱", "项目", "结算", "電報", "@xsm77788",
-            "挣米", "日赚", "回款", "上压", "下分", "担保", "流水", "兼职",
+            # 詐騙/博弈
+            "假钞", "捡钱", "项目", "结算", "電報", "@xsm77788", 
+            "挣米", "日赚", "回款", "上压", "担保", "兼职",
             "风口", "一单", "博彩", "彩票", "赛车", "飞艇", "哈希",
-            "百家乐", "投资", "理财", "USDT", "TRX", "包过", "洗米", "跑分",
-            "查档", "身份证", "户籍", "开房", "手机号", "机主", 
+            "百家乐", "投资", "USDT", "TRX", "包过", "洗米", "跑分",
+            # 個資/黑產
+            "查档", "身份证", "户籍", "开房", "定位", "手机号", "机主", 
             "轨迹", "车队", "入款", "出款",
+            # 色情/引流 (針對您的截圖強化)
             "迷药", "春药", "裸聊", "极品", "强奸", "陪唱", 
-            "福利", "约炮", "同城", "资源", "人兽", "露出",
-            "萝莉", "爆炒", "做坏事", "大胸", "蜜桃臀",
-            "置顶", "软件", "下载", "点击", "链接"
+            "福利", "约炮", "同城", "资源", "人兽",
+            "萝莉", "爆炒", "做坏事", "蜜桃臀",
+            # 簡體高頻詞
+            "置顶", "软件", "下载", "点击", "链接", "免费观看", "点击下方"
         }
 
+        # 絕對簡體字表 (只要出現任何一個字，直接攔截，針對截圖中的字強化)
         self.strict_simplified_chars = {
             "国", "会", "发", "现", "关", "质", "员", "机", "产", "气", 
             "实", "则", "两", "结", "营", "报", "种", "专", "务", "战",
             "风", "让", "钱", "变", "间", "给", "号", "图", "亲", "极",
-            "点", "击", "库", "车", "东", "应", "库", "启", "书", "评"
+            "点", "击", "库", "车", "东", "应", "库", "启", "书", "评",
+            "无", "马", "过", "办", "证", "听", "说", "话", "频", "视",
+            "户", "罗", "边", "观", "么", "开", "区", "帅", "费"
         }
         
         self.violation_tracker: Dict[Tuple[int, int], Dict] = {}
@@ -240,16 +246,25 @@ def is_domain_allowed(url: str) -> bool:
 
 def contains_prohibited_content(text: str) -> Tuple[bool, Optional[str]]:
     if not text: return False, None
+    
+    # 1. 關鍵字攔截 (最高優先級)
     for kw in config.blocked_keywords:
         if kw in text: return True, f"關鍵字: {kw}"
+
+    # 2. 絕對簡體字表 (針對繁簡難辨字 - 強化版)
+    for char in text:
+        if char in config.strict_simplified_chars:
+            return True, f"禁語: {char}"
+
+    # 3. 傳統簡體字偵測
     try:
         if hanzidentifier.has_chinese(text):
             for char in text:
-                if char in config.strict_simplified_chars:
-                    return True, f"禁語: {char}"
+                # 嚴格過濾：只要是簡體且不是繁體就殺
                 if hanzidentifier.is_simplified(char) and not hanzidentifier.is_traditional(char):
                     return True, f"簡體: {char}"
     except: pass
+
     return False, None
 
 async def unban_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -298,10 +313,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     all_texts: List[str] = []
     violation_reason: Optional[str] = None
+    
+    # 提取本文與說明文字
     if msg.text: all_texts.append(msg.text)
     if msg.caption: all_texts.append(msg.caption)
     
-    # 轉傳來源深度檢查
+    # 轉傳來源深度檢查 (標題、人名)
     if msg.forward_origin:
         src_name = ""
         if hasattr(msg.forward_origin, 'chat') and msg.forward_origin.chat:
@@ -309,12 +326,21 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif hasattr(msg.forward_origin, 'sender_user') and msg.forward_origin.sender_user:
             src_name = msg.forward_origin.sender_user.full_name
         if src_name:
-            all_texts.append(src_name)
+            all_texts.append(src_name) # 將來源名稱加入文本分析
             is_bad_src, src_reason = contains_prohibited_content(src_name)
             if is_bad_src:
                 violation_reason = f"轉傳來源違規 ({src_name})"
 
-    # 聯絡人/電話/姓名偵測
+    # 按鈕與投票內容提取
+    if msg.reply_markup and hasattr(msg.reply_markup, 'inline_keyboard'):
+        for row in msg.reply_markup.inline_keyboard:
+            for btn in row:
+                if hasattr(btn, 'text'): all_texts.append(btn.text)
+    if msg.poll:
+        all_texts.append(msg.poll.question)
+        for opt in msg.poll.options: all_texts.append(opt.text)
+
+    # 聯絡人/電話/姓名偵測 (強化版)
     if not violation_reason and msg.contact:
         phone = msg.contact.phone_number or ""
         clean_phone = re.sub(r'[+\-\s]', '', phone)
@@ -325,12 +351,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if msg.contact.first_name: all_texts.append(msg.contact.first_name)
         if msg.contact.last_name: all_texts.append(msg.contact.last_name)
     
-    # 地點偵測
+    # 地點偵測 (地址/標題)
     if not violation_reason and msg.venue:
         if msg.venue.title: all_texts.append(msg.venue.title)
         if msg.venue.address: all_texts.append(msg.venue.address)
 
-    # 貼圖偵測
+    # 貼圖偵測 (大小寫校正)
     if not violation_reason and msg.sticker:
         try:
             s_set = await context.bot.get_sticker_set(msg.sticker.set_name)
@@ -338,11 +364,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if ("@" in combined_lower or "_by_" in combined_lower):
                 if not any(wd in combined_lower for wd in config.sticker_whitelist):
                     safe_title = s_set.title.replace("@", "")
-                    violation_reason = f"未授權 ID ({safe_title})"
+                    violation_reason = f"貼圖包含未授權 ID ({safe_title})"
             else: all_texts.append(s_set.title)
         except: pass
 
-    # 內容偵測
+    # 綜合文本偵測 (關鍵字 + 簡體字)
     if not violation_reason:
         for t in all_texts:
             is_bad, r = contains_prohibited_content(t)
@@ -356,7 +382,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 u = ent.url if ent.type == MessageEntity.TEXT_LINK else (msg.text or msg.caption)[ent.offset : ent.offset+ent.length]
                 u_clean = u.strip().lower()
                 if not is_domain_allowed(u_clean):
-                    violation_reason = "不明連結"; break
+                    violation_reason = "含有不明連結"; break
                 if "t.me/" in u_clean:
                     path = u_clean.split('t.me/')[-1].split('/')[0].split('?')[0].replace("@", "")
                     if path and not any(wl in path for wl in config.telegram_link_whitelist):
@@ -424,7 +450,7 @@ def unban_member():
         async def do_unban():
             try:
                 p = ChatPermissions(can_send_messages=True, can_send_audios=True, can_send_documents=True, can_send_photos=True, can_send_videos=True, can_send_video_notes=True, can_send_voice_notes=True, can_send_polls=True, can_send_other_messages=True, can_add_web_page_previews=True, can_invite_users=True, can_pin_messages=True, can_change_info=True)
-                await config.application.bot.restrict_chat_member(chat_id, user_id, p); await config.application.bot.unban_chat_member(chat_id, user_id, only_if_banned=True)
+                await config.application.bot.restrict_chat_member(chat.id, user_id, p); await config.application.bot.unban_chat_member(chat_id, user_id, only_if_banned=True)
                 config.reset_violation(chat_id, user_id)
                 config.add_log("SUCCESS", f"🦋 網頁解封 {user_name}，地點 [{member_data.get('chat_title')}]")
                 n_msg = await config.application.bot.send_message(
