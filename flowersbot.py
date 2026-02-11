@@ -40,58 +40,69 @@ def get_now_tw():
     """ 取得目前的台灣時間 """
     return datetime.now(timezone.utc).astimezone(TW_TZ)
 
-# --- 2. 本地資料持久化管理 (JSON File) ---
-class PersistenceManager:
-    def __init__(self, filename="flowersbot_data.json"):
-        self.filename = filename
-
-    def save(self, data: dict):
+# --- 2. 雲端資料庫管理 (Firestore REST) ---
+class FirestoreManager:
+    def __init__(self):
         try:
-            serializable_data = self._serialize(data)
-            with open(self.filename, 'w', encoding='utf-8') as f:
-                json.dump(serializable_data, f, ensure_ascii=False, indent=2)
+            raw_config = os.getenv("__firebase_config", "{}")
+            self.config = json.loads(raw_config) if raw_config.strip() else {}
         except Exception as e:
-            logger.error(f"資料儲存失敗: {e}")
+            logger.error(f"Firebase 設定解析失敗: {e}")
+            self.config = {}
+            
+        self.app_id = os.getenv("__app_id", "flowers-bot-default")
+        self.project_id = self.config.get("projectId")
+        self.api_key = self.config.get("apiKey")
+        
+        if self.project_id:
+            self.base_url = f"https://firestore.googleapis.com/v1/projects/{self.project_id}/databases/(default)/documents/artifacts/{self.app_id}/public/data"
+        else:
+            self.base_url = None
+        self.id_token = None
 
-    def load(self) -> dict:
-        if not os.path.exists(self.filename):
-            return {}
+    def _authenticate(self):
+        if not self.api_key or not self.project_id: return False
         try:
-            with open(self.filename, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-            return self._deserialize(data)
+            url = f"https://identitytoolkit.googleapis.com/v1/accounts:signUp?key={self.api_key}"
+            resp = requests.post(url, json={"returnSecureToken": True}, timeout=10)
+            data = resp.json()
+            self.id_token = data.get("idToken")
+            return True if self.id_token else False
         except Exception as e:
-            logger.error(f"資料讀取失敗: {e}")
-            return {}
+            logger.error(f"雲端驗證失敗: {e}")
+            return False
 
-    def _serialize(self, data):
-        if isinstance(data, dict):
-            return {k: self._serialize(v) for k, v in data.items()}
-        elif isinstance(data, list):
-            return [self._serialize(v) for v in data]
-        elif isinstance(data, datetime):
-            return data.isoformat()
-        return data
+    def save_data(self, collection: str, doc_id: str, data: dict):
+        if not self.base_url or (not self.id_token and not self._authenticate()): return
+        try:
+            url = f"{self.base_url}/{collection}/{doc_id}"
+            fields = {k: {"stringValue": str(v)} for k, v in data.items()}
+            requests.patch(url, params={"updateMask.fieldPaths": list(data.keys())}, json={"fields": fields}, headers={"Authorization": f"Bearer {self.id_token}"}, timeout=10)
+        except: pass
 
-    def _deserialize(self, data):
-        if isinstance(data, dict):
-            new_dict = {}
-            for k, v in data.items():
-                if isinstance(v, str):
-                    try:
-                        if "T" in v and v.count("-") == 2 and v.count(":") >= 2:
-                             new_val = datetime.fromisoformat(v)
-                        else:
-                             new_val = v
-                    except:
-                        new_val = v
-                else:
-                    new_val = self._deserialize(v)
-                new_dict[k] = new_val
-            return new_dict
-        elif isinstance(data, list):
-            return [self._deserialize(v) for v in data]
-        return data
+    def delete_data(self, collection: str, doc_id: str):
+        if not self.base_url or (not self.id_token and not self._authenticate()): return
+        try:
+            url = f"{self.base_url}/{collection}/{doc_id}"
+            requests.delete(url, headers={"Authorization": f"Bearer {self.id_token}"}, timeout=10)
+        except: pass
+
+    def load_all(self, collection: str) -> List[dict]:
+        if not self.base_url or (not self.id_token and not self._authenticate()): return []
+        try:
+            url = f"{self.base_url}/{collection}"
+            resp = requests.get(url, headers={"Authorization": f"Bearer {self.id_token}"}, timeout=10)
+            if resp.status_code != 200: return []
+            docs = resp.json().get("documents", [])
+            result = []
+            for d in docs:
+                fields = d.get("fields", {})
+                item = {k: v.get("stringValue") for k, v in fields.items()}
+                if "uid" in item: item["uid"] = int(item["uid"])
+                if "chat_id" in item: item["chat_id"] = int(item["chat_id"])
+                result.append(item)
+            return result
+        except: return []
 
 # --- 3. 全域配置與狀態儲存 ---
 class BotConfig:
@@ -99,13 +110,10 @@ class BotConfig:
         self.bot_token = os.getenv("TG_BOT_TOKEN")
         self.application = None 
         self.loop = None        
-        
-        # [關鍵修正] 初始化持久化管理器
         self.pm = PersistenceManager()
         
         self.warning_duration = 5
         self.max_violations = 3
-        
         
         # 網域白名單
         self.allowed_domains = {
@@ -152,10 +160,16 @@ class BotConfig:
             "置顶", "软件", "下载", "点击", "链接", "免费观看", "点击下方"
         }
 
-        # 絕對簡體字庫 (包含所有常見簡體字，確保萬無一失)
-        self.strict_simplified_chars = set(
-            "爱罢备笔毕边宾长产车彻尘撑惩诚书迟驰充储处触创辞聪从窜达带担胆导灯点电垫东冬动冻斗独断对队吨夺堕鹅额讹恶饿儿尔发罚阀法烦范飞废费分坟奋愤风丰妇复负盖干赶个巩沟构购谷顾刮关观馆惯贯广规归龟国过孩汉号阂鹤贺横轰红后胡护壶户华画划话怀坏欢环还缓换唤痪焕涣黄谎挥辉毁贿秽会烩汇讳诲绘荤浑伙获货祸击机积饥讥鸡绩缉极辑级挤几蓟剂济计记际继纪夹荚颊贾钾价驾歼监坚笺间艰缄茧检碱拣捡简俭减荐槛鉴践贱见键舰剑饯渐溅涧建僵姜将奖浆桨蒋讲酱胶浇骄娇搅铰矫侥脚饺缴绞轿较阶节茎鲸惊经颈静镜径痉竞净纠厩旧驹举据锯惧剧鹃绢杰洁结诫届紧锦仅谨进晋烬尽劲荆觉决诀绝钧军骏开凯颗壳课垦恳抠库裤夸块侩宽矿旷况亏岿窥馈溃扩阔蜡腊来赖蓝栏拦篮阑兰澜谰揽览懒缆烂滥捞劳涝乐镭垒类泪篱离里鲤礼丽历励砾历沥隶俩联莲连镰怜涟帘敛脸链恋炼练粮凉两辆谅疗辽镣猎临邻鳞凛赁龄铃凌灵岭领刘龙聋咙笼垄拢陇楼娄搂篓芦卢颅庐炉掳卤虏鲁赂禄录陆驴吕铝侣屡缕虑滤绿峦挛孪滦乱抡轮伦仑沦论萝罗逻锣箩骡骆络妈玛码蚂马骂吗买麦卖迈脉瞒馒蛮满谩猫锚铆贸么霉没镁门闷们锰梦谜弥觅绵缅庙灭悯敏鸣铭谬谋亩钠纳难挠脑恼闹内拟腻撵捻酿鸟聂啮镊镍柠狞宁拧泞钮纽脓浓农疟诺欧鸥殴呕沤盘庞赔喷鹏骗飘频贫苹凭评泼颇扑铺朴谱栖凄脐齐骑岂启气弃讫牵扦钎铅迁签谦钱钳潜浅谴堑枪呛墙蔷强抢锹桥乔侨翘窍窃钦亲轻氢倾顷请庆琼穷趋区躯驱龋颧权劝却鹊让饶扰绕热韧认纫荣绒软锐闰润洒萨鳃赛伞丧骚扫涩杀纱筛晒闪陕赡缮伤赏烧绍赊摄慑设绅审婶肾渗声绳胜圣师狮湿诗尸时蚀实识驶势释饰视试寿兽枢输书赎属术树竖数帅双谁税顺说硕烁丝饲耸怂颂讼诵擞苏诉肃虽随绥岁孙损笋缩琐锁獭挞抬态摊贪瘫滩坛谭谈叹汤烫涛绦讨腾誊锑题体屉条贴铁厅听烃铜统头图涂团颓蜕脱鸵驮驼椭洼袜弯湾顽万网韦违围为潍维苇伟伪纬谓卫温闻纹稳问瓮挝蜗涡窝卧呜钨乌污诬无芜吴坞雾务误锡牺袭习铣戏细虾辖峡侠狭下厦吓纤咸贤衔嫌显险现献县馅羡宪线厢镶乡详响项萧销晓啸蝎协挟携胁谐写泻谢锌衅兴汹锈绣虚嘘须许绪续轩悬选癣绚学勋询寻驯训讯逊压鸦鸭哑亚讶阉烟盐严岩延颜掩眼演厌彦砚讣阳扬杨疡养痒样瑶摇尧遥窑谣药爷页业叶医铱颐遗仪彝蚁艺亿忆义诣议谊译异绎荫阴银饮樱婴鹰应缨莹萤营荧蝇赢颖映拥佣痈踊咏泳涌永优忧邮铀犹游诱舆鱼渔娱与屿语吁御狱誉预驭鸳渊辕园员圆缘远愿约跃钥岳粤悦阅云郧匀陨运蕴酝晕韵杂灾载攒暂赞赃脏凿枣灶责择则泽贼赠扎札轧闸铡诈斋债毡盏斩辗崭栈战绽张涨帐账胀赵蛰辙锗这贞针侦诊镇阵挣睁狰争帧症证只芝枝掷质滞钟终种肿众诌周轴纣皱昼骤猪诸诛烛瞩嘱贮铸筑驻专砖转赚桩庄装妆壮状锥赘坠缀谆浊兹资渍踪综总纵邹诅组钻致钟么为只凶准启板里面余链泄"
-        )
+        # 絕對簡體字表 (加入截圖中的 临, 宫, 际, 务, 员)
+        self.strict_simplified_chars = {
+            "国", "会", "发", "现", "关", "质", "员", "机", "产", "气", 
+            "实", "则", "两", "结", "营", "报", "种", "专", "务", "战",
+            "风", "让", "钱", "变", "间", "给", "号", "图", "亲", "极",
+            "点", "击", "库", "车", "东", "应", "库", "启", "书", "评",
+            "无", "马", "过", "办", "证", "听", "说", "话", "频", "视",
+            "户", "罗", "边", "观", "么", "开", "区", "帅", "费",
+            "临", "宫", "际", "备"
+        }
         
         self.violation_tracker: Dict[Tuple[int, int], Dict] = {}
         self.blacklist_members: Dict[str, Dict] = {}
@@ -291,7 +305,7 @@ async def unban_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 text=f"🦋 <b>霍格華茲解禁通知</b> 🦋\n🦉用戶學員：{mention}\n✅經由魔法部審判為無罪\n✅已被鳳凰的眼淚治癒返校\n🪄<b>請學員注意勿再違反校規</b>",
                 parse_mode=ParseMode.HTML
             )
-            # 指令解封不刪除
+            # 指令解封保留訊息
     except Exception as e: await update.message.reply_text(f"❌ 錯誤: {e}")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -324,7 +338,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if is_bot: return
 
-    # --- 1. 先提取所有文字 (為了 Log) ---
+    # --- 1. 先提取所有文字 (為了 Log 與 檢查) ---
     all_texts: List[str] = []
     if msg.text: all_texts.append(msg.text)
     if msg.caption: all_texts.append(msg.caption)
@@ -359,10 +373,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if msg.poll:
         all_texts.append(msg.poll.question)
         for opt in msg.poll.options: all_texts.append(opt.text)
+        
+    # 引用 (Quote) 內容提取
+    quote = getattr(msg, 'quote', None)
+    if quote and hasattr(quote, 'text') and quote.text:
+        all_texts.append(quote.text)
 
     # --- 2. 記錄 Log (即使是管理員也會紀錄) ---
     full_content_log = " | ".join(all_texts)
-    config.add_log("INFO", f"[{offender_name}] 偵測: {full_content_log[:50]}...")
+    config.add_log("INFO", f"[{msg.chat.title}] - [{offender_name}] 偵測: {full_content_log[:50]}...")
 
     # --- 3. 管理員豁免檢查 (在 Log 之後) ---
     if user:
@@ -383,13 +402,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # --- 4. 開始檢查 ---
     # 轉傳來源
     if msg.forward_origin:
-        # src_name 已在上方提取
-        src_name = ""
-        if hasattr(msg.forward_origin, 'chat') and msg.forward_origin.chat:
-            src_name = msg.forward_origin.chat.title
-        elif hasattr(msg.forward_origin, 'sender_user') and msg.forward_origin.sender_user:
-            src_name = msg.forward_origin.sender_user.full_name
-
         if src_name:
             is_bad_src, src_reason = contains_prohibited_content(src_name)
             if is_bad_src: violation_reason = f"轉傳來源違規 ({src_name})"
@@ -413,7 +425,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     violation_reason = f"未授權 ID ({safe_title})"
         except: pass
 
-    # 全文掃描
+    # 全文掃描 (Text + Caption + Quote + Source Name + Button + ...)
     if not violation_reason:
         unique_texts = list(set(all_texts))
         for t in unique_texts:
@@ -435,9 +447,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         violation_reason = f"未授權 TG 連結 ({path})"; break
 
     if violation_reason:
-        # 標記媒體群組
         if msg.media_group_id: config.flagged_media_groups[msg.media_group_id] = datetime.now()
-        
         try:
             try: await msg.delete(); config.total_deleted_count += 1
             except: pass
@@ -496,15 +506,13 @@ def unban_member():
         key = f"{chat_id}_{user_id}"
         member_data = config.blacklist_members.get(key, {})
         user_name = member_data.get("name", f"學員 {user_id}")
-        
-        mention = f"<b>{user_name}</b>" if user_id < 0 else f'<a href="tg://user?id={user_id}">{user_name}</a>'
-            
+        mention = f'<a href="tg://user?id={user_id}">{user_name}</a>'
         async def do_unban():
             try:
                 p = ChatPermissions(can_send_messages=True, can_send_audios=True, can_send_documents=True, can_send_photos=True, can_send_videos=True, can_send_video_notes=True, can_send_voice_notes=True, can_send_polls=True, can_send_other_messages=True, can_add_web_page_previews=True, can_invite_users=True, can_pin_messages=True, can_change_info=True)
                 
                 if user_id > 0:
-                    await config.application.bot.restrict_chat_member(chat_id, user_id, p)
+                    await config.application.bot.restrict_chat_member(chat.id, user_id, p)
                     await config.application.bot.unban_chat_member(chat_id, user_id, only_if_banned=True)
                 else:
                     await config.application.bot.unban_chat_sender_chat(chat_id, user_id)
@@ -512,12 +520,12 @@ def unban_member():
                 config.reset_violation(chat_id, user_id)
                 config.add_log("SUCCESS", f"🦋 網頁解封 {user_name}，地點 [{member_data.get('chat_title')}]")
                 
+                # --- 鎖定內容 1: 解禁通知 (保留不刪除) ---
                 n_msg = await config.application.bot.send_message(
                     chat_id=chat_id, 
                     text=f"🦋 <b>霍格華茲解禁通知</b> 🦋\n🦉用戶學員：{mention}\n✅經由魔法部審判為無罪\n✅已被鳳凰的眼淚治癒返校\n🪄<b>請學員注意勿再違反校規</b>", 
                     parse_mode=ParseMode.HTML
                 )
-                # 不刪除
             except Exception as e: config.add_log("ERROR", f"🦋 解封失敗: {e}")
         if config.loop: asyncio.run_coroutine_threadsafe(do_unban(), config.loop)
     except: pass
