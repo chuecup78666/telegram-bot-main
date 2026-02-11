@@ -118,8 +118,8 @@ class BotConfig:
         self.allowed_domains = {
             "google.com", "wikipedia.org", "telegram.org", "t.me", 
             "facebook.com", "github.com", "blogspot.com", "line.me", 
-            "portaly.cc", "ttt3388.com.tw", "webnode.tw", "ecup78.com", 
-            "jktank.net", "youtube.com", "youtu.be"
+            "portaly.cc", "ttt3388.com.tw", "webnode.tw", "ecup78.com", "jktank.net",
+            "youtube.com", "youtu.be"
         }
         
         self.telegram_link_whitelist = {
@@ -133,39 +133,23 @@ class BotConfig:
         
         self.sticker_whitelist = {"ecup78_bot", "ecup78"}
         
-        # 強化：詐騙/博弈/色情 常見來源國碼
         self.blocked_phone_prefixes = {
-            "+91",  # 印度
-            "+95",  # 緬甸 (詐騙園區大本營)
-            "+60",  # 馬來西亞
-            "+62",  # 印尼
-            "+855", # 柬埔寨
-            "+84",  # 越南
-            "+44",  # 英國 (常見虛擬號)
-            "+86",   # 中國 (視情況)
-            "+855",
-            "+41"
+            "+91", "+95", "+60", "+62", "+855", "+84", "+44", "+86"
         }
         
-        # 強化：海量詐騙關鍵字庫 (包含簡體與詐騙用語)
         self.blocked_keywords = {
-            # 詐騙/博弈
-            "假钞", "捡钱", "项目", "電報", "@xsm77788",
-            "挣米", "日赚", "回款", "上压", "下分", "担保", "流水", "兼职",
+            "假钞", "捡钱", "项目", "结算", 
+            "挣米", "日赚", "回款", "上压", "下分", "担保", "兼职",
             "风口", "翻身", "一单", "博彩", "彩票", "赛车", "飞艇", "哈希",
             "百家乐", "投资", "理财", "USDT", "TRX", "包过", "洗米", "跑分",
-            # 個資/黑產
             "查档", "身份证", "户籍", "开房", "定位", "手机号", "机主", 
             "全家", "轨迹", "车队", "入款", "出款",
-            # 色情/引流
             "迷药", "春药", "裸聊", "极品", "强奸", 
-            "约炮", "同城", "吃肉", "资源", "人兽", "露出",
-            "萝莉", "爆炒", "做坏事", "蜜桃臀",
-            # 簡體高頻詞
+            "约炮", "同城", "资源", "人兽",
+            "萝莉", "爆炒", "反差", "做坏事", "蜜桃臀",
             "置顶", "软件", "下载", "点击", "链接"
         }
 
-        # 絕對簡體字表 (只要出現這些字，不用判斷比例，直接殺)
         self.strict_simplified_chars = {
             "国", "会", "发", "现", "关", "质", "员", "机", "产", "气", 
             "实", "则", "两", "结", "营", "报", "种", "专", "务", "战",
@@ -258,11 +242,11 @@ def is_domain_allowed(url: str) -> bool:
 def contains_prohibited_content(text: str) -> Tuple[bool, Optional[str]]:
     if not text: return False, None
     
-    # 1. 關鍵字攔截 (最高優先級)
+    # 1. 關鍵字攔截
     for kw in config.blocked_keywords:
         if kw in text: return True, f"關鍵字: {kw}"
 
-    # 2. 絕對簡體字表 (針對繁簡難辨字)
+    # 2. 絕對簡體字表
     for char in text:
         if char in config.strict_simplified_chars:
             return True, f"禁語: {char}"
@@ -334,10 +318,21 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif hasattr(msg.forward_origin, 'sender_user') and msg.forward_origin.sender_user:
             src_name = msg.forward_origin.sender_user.full_name
         if src_name:
-            all_texts.append(src_name) # 將來源名稱加入文本分析
+            all_texts.append(src_name) 
             is_bad_src, src_reason = contains_prohibited_content(src_name)
             if is_bad_src:
                 violation_reason = f"轉傳來源違規 ({src_name})"
+
+    # 按鈕文字提取 (新增)
+    if msg.reply_markup and hasattr(msg.reply_markup, 'inline_keyboard'):
+        for row in msg.reply_markup.inline_keyboard:
+            for btn in row:
+                if hasattr(btn, 'text'): all_texts.append(btn.text)
+
+    # 投票內容提取 (新增)
+    if msg.poll:
+        all_texts.append(msg.poll.question)
+        for opt in msg.poll.options: all_texts.append(opt.text)
 
     # 聯絡人/電話/姓名偵測 (強化版)
     if not violation_reason and msg.contact:
@@ -387,7 +382,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         violation_reason = f"未授權 TG 連結 ({path})"; break
 
     if violation_reason:
-        if mgid: config.flagged_media_groups[mgid] = datetime.now()
+        if msg.media_group_id: config.flagged_media_groups[msg.media_group_id] = datetime.now()
         try:
             try: await msg.delete(); config.total_deleted_count += 1
             except: pass
