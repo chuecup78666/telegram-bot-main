@@ -80,6 +80,7 @@ class PersistenceManager:
             for k, v in data.items():
                 if isinstance(v, str):
                     try:
+                        # 嘗試將 ISO 格式字串轉回 datetime
                         if "T" in v and v.count("-") == 2 and v.count(":") >= 2:
                              new_val = datetime.fromisoformat(v)
                         else:
@@ -379,8 +380,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # --- 2. 記錄 Log (全文字符串) ---
     full_content_log = " | ".join(all_texts)
     config.add_log("INFO", f"[{msg.chat.title}] [{offender_name}] 全文掃描: {full_content_log[:50]}...")
-
-    # --- 3. 管理員豁免檢查 ---
+    
+    # --- 3. 管理員豁免檢查 (在 Log 之後) ---
     if user:
         try:
             if msg.chat.type != "private":
@@ -397,8 +398,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     violation_reason: Optional[str] = None
 
     # --- 4. 開始檢查 ---
-    
-    # 聯絡人電話優先檢查
+    # 轉傳來源
+    if msg.forward_origin:
+        if src_name:
+            is_bad_src, src_reason = contains_prohibited_content(src_name)
+            if is_bad_src: violation_reason = f"轉傳來源違規 ({src_name})"
+
+    # 聯絡人電話
     if not violation_reason and msg.contact:
         phone = msg.contact.phone_number or ""
         clean_phone = re.sub(r'[+\-\s]', '', phone)
@@ -417,7 +423,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     violation_reason = f"未授權 ID ({safe_title})"
         except: pass
 
-    # 全文關鍵字與簡體掃描
+    # 全文掃描
     if not violation_reason:
         unique_texts = list(set(all_texts))
         for t in unique_texts:
@@ -464,6 +470,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 sent_warn = await context.bot.send_message(msg.chat.id, f"🦋 <b>霍格華茲警告通知</b> 🦋\n\n🦉用戶學員：{mention_html}\n⚠️違反校規：{violation_reason}\n⚠️違規計次：({v_count}/{config.max_violations})\n🪄<b>多次違規將被黑魔法教師擊殺</b>", parse_mode=ParseMode.HTML)
                 await asyncio.sleep(config.warning_duration); await sent_warn.delete()
         except: pass
+    elif msg.media_group_id and msg.media_group_id in config.flagged_media_groups:
+        try: await msg.delete()
+        except: pass
+    elif not msg.sticker:
+        # 更新日誌顯示
+        full_log_text = " | ".join(all_texts)
+        config.add_log("INFO", f"[{msg.chat.title}] [{offender_name}] 全文掃描: {full_log_text[:50]}...")
 
 # --- 5. Flask 後台管理網頁 ---
 app = Flask(__name__)
@@ -501,10 +514,11 @@ def unban_member():
         mention = f'<a href="tg://user?id={user_id}">{user_name}</a>'
         async def do_unban():
             try:
+                # 修正：將 chat.id 改為 chat_id
                 p = ChatPermissions(can_send_messages=True, can_send_audios=True, can_send_documents=True, can_send_photos=True, can_send_videos=True, can_send_video_notes=True, can_send_voice_notes=True, can_send_polls=True, can_send_other_messages=True, can_add_web_page_previews=True, can_invite_users=True, can_pin_messages=True, can_change_info=True)
                 
                 if user_id > 0:
-                    await config.application.bot.restrict_chat_member(chat.id, user_id, p)
+                    await config.application.bot.restrict_chat_member(chat_id, user_id, p)
                     await config.application.bot.unban_chat_member(chat_id, user_id, only_if_banned=True)
                 else:
                     await config.application.bot.unban_chat_sender_chat(chat_id, user_id)
@@ -512,13 +526,11 @@ def unban_member():
                 config.reset_violation(chat_id, user_id)
                 config.add_log("SUCCESS", f"🦋 網頁解封 {user_name}，地點 [{member_data.get('chat_title')}]")
                 
-                # --- 鎖定內容 1: 解禁通知 (保留不刪除) ---
                 n_msg = await config.application.bot.send_message(
                     chat_id=chat_id, 
                     text=f"🦋 <b>霍格華茲解禁通知</b> 🦋\n🦉用戶學員：{mention}\n✅經由魔法部審判為無罪\n✅已被鳳凰的眼淚治癒返校\n🪄<b>請學員注意勿再違反校規</b>", 
                     parse_mode=ParseMode.HTML
                 )
-                # 不刪除
             except Exception as e: config.add_log("ERROR", f"🦋 解封失敗: {e}")
         if config.loop: asyncio.run_coroutine_threadsafe(do_unban(), config.loop)
     except: pass
