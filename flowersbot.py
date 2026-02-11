@@ -40,69 +40,59 @@ def get_now_tw():
     """ 取得目前的台灣時間 """
     return datetime.now(timezone.utc).astimezone(TW_TZ)
 
-# --- 2. 雲端資料庫管理 (Firestore REST) ---
-class FirestoreManager:
-    def __init__(self):
+# --- 2. 本地資料持久化管理 (JSON File) ---
+class PersistenceManager:
+    def __init__(self, filename="flowersbot_data.json"):
+        self.filename = filename
+
+    def save(self, data: dict):
         try:
-            raw_config = os.getenv("__firebase_config", "{}")
-            self.config = json.loads(raw_config) if raw_config.strip() else {}
+            # 序列化 datetime
+            serializable_data = self._serialize(data)
+            with open(self.filename, 'w', encoding='utf-8') as f:
+                json.dump(serializable_data, f, ensure_ascii=False, indent=2)
         except Exception as e:
-            logger.error(f"Firebase 設定解析失敗: {e}")
-            self.config = {}
-            
-        self.app_id = os.getenv("__app_id", "flowers-bot-default")
-        self.project_id = self.config.get("projectId")
-        self.api_key = self.config.get("apiKey")
-        
-        if self.project_id:
-            self.base_url = f"https://firestore.googleapis.com/v1/projects/{self.project_id}/databases/(default)/documents/artifacts/{self.app_id}/public/data"
-        else:
-            self.base_url = None
-        self.id_token = None
+            logger.error(f"資料儲存失敗: {e}")
 
-    def _authenticate(self):
-        if not self.api_key or not self.project_id: return False
+    def load(self) -> dict:
+        if not os.path.exists(self.filename):
+            return {}
         try:
-            url = f"https://identitytoolkit.googleapis.com/v1/accounts:signUp?key={self.api_key}"
-            resp = requests.post(url, json={"returnSecureToken": True}, timeout=10)
-            data = resp.json()
-            self.id_token = data.get("idToken")
-            return True if self.id_token else False
+            with open(self.filename, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            return self._deserialize(data)
         except Exception as e:
-            logger.error(f"雲端驗證失敗: {e}")
-            return False
+            logger.error(f"資料讀取失敗: {e}")
+            return {}
 
-    def save_data(self, collection: str, doc_id: str, data: dict):
-        if not self.base_url or (not self.id_token and not self._authenticate()): return
-        try:
-            url = f"{self.base_url}/{collection}/{doc_id}"
-            fields = {k: {"stringValue": str(v)} for k, v in data.items()}
-            requests.patch(url, params={"updateMask.fieldPaths": list(data.keys())}, json={"fields": fields}, headers={"Authorization": f"Bearer {self.id_token}"}, timeout=10)
-        except: pass
+    def _serialize(self, data):
+        if isinstance(data, dict):
+            return {k: self._serialize(v) for k, v in data.items()}
+        elif isinstance(data, list):
+            return [self._serialize(v) for v in data]
+        elif isinstance(data, datetime):
+            return data.isoformat()
+        return data
 
-    def delete_data(self, collection: str, doc_id: str):
-        if not self.base_url or (not self.id_token and not self._authenticate()): return
-        try:
-            url = f"{self.base_url}/{collection}/{doc_id}"
-            requests.delete(url, headers={"Authorization": f"Bearer {self.id_token}"}, timeout=10)
-        except: pass
-
-    def load_all(self, collection: str) -> List[dict]:
-        if not self.base_url or (not self.id_token and not self._authenticate()): return []
-        try:
-            url = f"{self.base_url}/{collection}"
-            resp = requests.get(url, headers={"Authorization": f"Bearer {self.id_token}"}, timeout=10)
-            if resp.status_code != 200: return []
-            docs = resp.json().get("documents", [])
-            result = []
-            for d in docs:
-                fields = d.get("fields", {})
-                item = {k: v.get("stringValue") for k, v in fields.items()}
-                if "uid" in item: item["uid"] = int(item["uid"])
-                if "chat_id" in item: item["chat_id"] = int(item["chat_id"])
-                result.append(item)
-            return result
-        except: return []
+    def _deserialize(self, data):
+        if isinstance(data, dict):
+            new_dict = {}
+            for k, v in data.items():
+                if isinstance(v, str):
+                    try:
+                        if "T" in v and v.count("-") == 2 and v.count(":") >= 2:
+                             new_val = datetime.fromisoformat(v)
+                        else:
+                             new_val = v
+                    except:
+                        new_val = v
+                else:
+                    new_val = self._deserialize(v)
+                new_dict[k] = new_val
+            return new_dict
+        elif isinstance(data, list):
+            return [self._deserialize(v) for v in data]
+        return data
 
 # --- 3. 全域配置與狀態儲存 ---
 class BotConfig:
@@ -305,7 +295,7 @@ async def unban_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 text=f"🦋 <b>霍格華茲解禁通知</b> 🦋\n🦉用戶學員：{mention}\n✅經由魔法部審判為無罪\n✅已被鳳凰的眼淚治癒返校\n🪄<b>請學員注意勿再違反校規</b>",
                 parse_mode=ParseMode.HTML
             )
-            # 指令解封保留訊息
+            # 指令解封不刪除
     except Exception as e: await update.message.reply_text(f"❌ 錯誤: {e}")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -338,11 +328,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if is_bot: return
 
-    # --- 1. 先提取所有文字 (為了 Log 與 檢查) ---
+    # --- 1. 先提取所有文字 (包括引用內容) ---
     all_texts: List[str] = []
     if msg.text: all_texts.append(msg.text)
     if msg.caption: all_texts.append(msg.caption)
     
+    # 轉傳來源
     if msg.forward_origin:
         src_name = ""
         if hasattr(msg.forward_origin, 'chat') and msg.forward_origin.chat:
@@ -351,39 +342,45 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             src_name = msg.forward_origin.sender_user.full_name
         if src_name: all_texts.append(src_name)
 
+    # 聯絡人
     if msg.contact:
         if msg.contact.first_name: all_texts.append(msg.contact.first_name)
         if msg.contact.last_name: all_texts.append(msg.contact.last_name)
     
+    # 地點
     if msg.venue:
         if msg.venue.title: all_texts.append(msg.venue.title)
         if msg.venue.address: all_texts.append(msg.venue.address)
 
+    # 貼圖標題
     if msg.sticker:
         try:
             s_set = await context.bot.get_sticker_set(msg.sticker.set_name)
             all_texts.append(s_set.title)
         except: pass
     
+    # 按鈕文字
     if msg.reply_markup and hasattr(msg.reply_markup, 'inline_keyboard'):
         for row in msg.reply_markup.inline_keyboard:
             for btn in row:
                 if hasattr(btn, 'text'): all_texts.append(btn.text)
     
+    # 投票問題與選項
     if msg.poll:
         all_texts.append(msg.poll.question)
         for opt in msg.poll.options: all_texts.append(opt.text)
         
-    # 引用 (Quote) 內容提取
+    # [關鍵新增] 引用內容提取
     quote = getattr(msg, 'quote', None)
-    if quote and hasattr(quote, 'text') and quote.text:
-        all_texts.append(quote.text)
+    if quote:
+        if hasattr(quote, 'text') and quote.text: all_texts.append(quote.text)
+        if hasattr(quote, 'caption') and quote.caption: all_texts.append(quote.caption)
 
-    # --- 2. 記錄 Log (即使是管理員也會紀錄) ---
+    # --- 2. 記錄 Log (全文字符串) ---
     full_content_log = " | ".join(all_texts)
-    config.add_log("INFO", f"[{msg.chat.title}] - [{offender_name}] 偵測: {full_content_log[:50]}...")
+    config.add_log("INFO", f"[{msg.chat.title}] [{offender_name}] 全文掃描: {full_content_log[:50]}...")
 
-    # --- 3. 管理員豁免檢查 (在 Log 之後) ---
+    # --- 3. 管理員豁免檢查 ---
     if user:
         try:
             if msg.chat.type != "private":
@@ -400,13 +397,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     violation_reason: Optional[str] = None
 
     # --- 4. 開始檢查 ---
-    # 轉傳來源
-    if msg.forward_origin:
-        if src_name:
-            is_bad_src, src_reason = contains_prohibited_content(src_name)
-            if is_bad_src: violation_reason = f"轉傳來源違規 ({src_name})"
-
-    # 聯絡人電話
+    
+    # 聯絡人電話優先檢查
     if not violation_reason and msg.contact:
         phone = msg.contact.phone_number or ""
         clean_phone = re.sub(r'[+\-\s]', '', phone)
@@ -414,7 +406,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if any(clean_phone.startswith(pre) for pre in blocked_clean if pre):
             violation_reason = f"來自受限國家門號 ({phone[:3]}...)"
 
-    # 貼圖白名單
+    # 貼圖白名單 ID 檢查
     if not violation_reason and msg.sticker:
         try:
             s_set = await context.bot.get_sticker_set(msg.sticker.set_name)
@@ -425,7 +417,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     violation_reason = f"未授權 ID ({safe_title})"
         except: pass
 
-    # 全文掃描 (Text + Caption + Quote + Source Name + Button + ...)
+    # 全文關鍵字與簡體掃描
     if not violation_reason:
         unique_texts = list(set(all_texts))
         for t in unique_texts:
@@ -469,7 +461,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     parse_mode=ParseMode.HTML
                 )
             else:
-                sent_warn = await context.bot.send_message(msg.chat.id, f"🦋 <b>霍格華茲警告通知</b> 🦋\n\n🦉用戶學員：{mention_html}\n⚠️違反校規：{violation_reason}\n⚠️違規計次：({v_count}/{config.max_violations})\n🪄<b>多次違規將被黑魔法教授擊殺</b>", parse_mode=ParseMode.HTML)
+                sent_warn = await context.bot.send_message(msg.chat.id, f"🦋 <b>霍格華茲警告通知</b> 🦋\n\n🦉用戶學員：{mention_html}\n⚠️違反校規：{violation_reason}\n⚠️違規計次：({v_count}/{config.max_violations})\n🪄<b>多次違規將被黑魔法教師擊殺</b>", parse_mode=ParseMode.HTML)
                 await asyncio.sleep(config.warning_duration); await sent_warn.delete()
         except: pass
 
@@ -526,6 +518,7 @@ def unban_member():
                     text=f"🦋 <b>霍格華茲解禁通知</b> 🦋\n🦉用戶學員：{mention}\n✅經由魔法部審判為無罪\n✅已被鳳凰的眼淚治癒返校\n🪄<b>請學員注意勿再違反校規</b>", 
                     parse_mode=ParseMode.HTML
                 )
+                # 不刪除
             except Exception as e: config.add_log("ERROR", f"🦋 解封失敗: {e}")
         if config.loop: asyncio.run_coroutine_threadsafe(do_unban(), config.loop)
     except: pass
