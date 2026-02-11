@@ -47,7 +47,6 @@ class PersistenceManager:
 
     def save(self, data: dict):
         try:
-            # 序列化 datetime
             serializable_data = self._serialize(data)
             with open(self.filename, 'w', encoding='utf-8') as f:
                 json.dump(serializable_data, f, ensure_ascii=False, indent=2)
@@ -80,8 +79,6 @@ class PersistenceManager:
             for k, v in data.items():
                 if isinstance(v, str):
                     try:
-                        # 嘗試將 ISO 格式字串轉回 datetime
-                        # 簡單判斷是否像日期格式
                         if "T" in v and v.count("-") == 2 and v.count(":") >= 2:
                              new_val = datetime.fromisoformat(v)
                         else:
@@ -149,7 +146,7 @@ class BotConfig:
             "约炮", "同城", "资源", "人兽", "皮肤","萌酱",
             "萝莉", "爆炒", "做坏事", "蜜桃臀", "路边", "坏事", 
             # 簡體高頻詞
-            "置顶", "软件", "下载", "点击", "链接", "免费观看", "点击下方", "客服"
+            "置顶", "软件", "下载", "点击", "链接", "免费观看", "点击下方"
         }
 
         # 絕對簡體字表 (已整合您提供的清單)
@@ -173,7 +170,6 @@ class BotConfig:
         data = self.pm.load()
         if data:
             self.blacklist_members = data.get("blacklist", {})
-            # 恢復 tracker (字串 key 轉回 tuple)
             raw_tracker = data.get("tracker", {})
             for k, v in raw_tracker.items():
                 try:
@@ -182,7 +178,6 @@ class BotConfig:
                         self.violation_tracker[(int(parts[0]), int(parts[1]))] = v
                 except: pass
             
-            # 確保時間欄位是 datetime
             for k, v in self.blacklist_members.items():
                 if isinstance(v.get("time"), str):
                      try: v["time"] = datetime.fromisoformat(v["time"])
@@ -195,7 +190,7 @@ class BotConfig:
         data = {
             "blacklist": self.blacklist_members,
             "tracker": tracker_serializable,
-            "timestamp": get_now_tw().isoformat()
+            "stats": {"deleted": self.total_deleted_count}
         }
         Thread(target=self.pm.save, args=(data,), daemon=True).start()
 
@@ -237,11 +232,9 @@ class BotConfig:
         recent = []
         for key, info in self.blacklist_members.items():
             try:
-                # 確保 time 是 datetime
                 t = info.get("time")
                 if not isinstance(t, datetime):
                      t = datetime.fromisoformat(t) if t else now
-                
                 if (now - t).total_seconds() < 86400: 
                     if filter_chat_id is None or info["chat_id"] == filter_chat_id:
                         recent.append(info)
@@ -300,22 +293,48 @@ async def unban_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 text=f"🦋 <b>霍格華茲解禁通知</b> 🦋\n🦉用戶學員：{mention}\n✅經由魔法部審判為無罪\n✅已被鳳凰的眼淚治癒返校\n🪄<b>請學員注意勿再違反校規</b>",
                 parse_mode=ParseMode.HTML
             )
-            # 指令解封保留訊息
+            # 指令解封不刪除
     except Exception as e: await update.message.reply_text(f"❌ 錯誤: {e}")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     config.last_heartbeat = get_now_tw()
     if not update.message: return
     msg = update.message
-    user, chat = msg.from_user, msg.chat
-    if not user or user.is_bot: return
+    
+    # 判定發送者類型 (關鍵修復：不應直接 return)
+    user = msg.from_user
+    sender_chat = msg.sender_chat # 頻道身分
+    
+    # 決定違規主體
+    offender_id = None
+    offender_name = "Unknown"
+    mention_html = ""
+    is_bot = False
 
-    # 管理員豁免
-    try:
-        if chat.type != "private":
-            cm = await chat.get_member(user.id)
-            if cm.status in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]: return 
-    except: pass
+    if user:
+        offender_id = user.id
+        offender_name = user.full_name
+        is_bot = user.is_bot
+        mention_html = user.mention_html()
+    elif sender_chat:
+        # 處理匿名管理員或頻道發言
+        offender_id = sender_chat.id
+        offender_name = sender_chat.title
+        mention_html = f"<b>{offender_name}</b>"
+        # 如果 sender_chat ID 等於當前 chat ID，代表是群組本身的匿名管理員發言 -> 豁免
+        if sender_chat.id == msg.chat.id: return
+    else:
+        return 
+
+    if is_bot: return
+
+    # 管理員豁免 (僅限 user)
+    if user:
+        try:
+            if msg.chat.type != "private":
+                cm = await msg.chat.get_member(user.id)
+                if cm.status in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]: return 
+        except: pass
 
     all_texts: List[str] = []
     violation_reason: Optional[str] = None
@@ -330,12 +349,21 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif hasattr(msg.forward_origin, 'sender_user') and msg.forward_origin.sender_user:
             src_name = msg.forward_origin.sender_user.full_name
         if src_name:
-            all_texts.append(src_name)
+            all_texts.append(src_name) 
             is_bad_src, src_reason = contains_prohibited_content(src_name)
             if is_bad_src:
                 violation_reason = f"轉傳來源違規 ({src_name})"
 
-    # 聯絡人偵測
+    # 按鈕與投票
+    if msg.reply_markup and hasattr(msg.reply_markup, 'inline_keyboard'):
+        for row in msg.reply_markup.inline_keyboard:
+            for btn in row:
+                if hasattr(btn, 'text'): all_texts.append(btn.text)
+    if msg.poll:
+        all_texts.append(msg.poll.question)
+        for opt in msg.poll.options: all_texts.append(opt.text)
+
+    # 聯絡人
     if not violation_reason and msg.contact:
         phone = msg.contact.phone_number or ""
         clean_phone = re.sub(r'[+\-\s]', '', phone)
@@ -345,12 +373,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if msg.contact.first_name: all_texts.append(msg.contact.first_name)
         if msg.contact.last_name: all_texts.append(msg.contact.last_name)
     
-    # 地點偵測
+    # 地點
     if not violation_reason and msg.venue:
         if msg.venue.title: all_texts.append(msg.venue.title)
         if msg.venue.address: all_texts.append(msg.venue.address)
 
-    # 貼圖偵測
+    # 貼圖 (大小寫校正)
     if not violation_reason and msg.sticker:
         try:
             s_set = await context.bot.get_sticker_set(msg.sticker.set_name)
@@ -358,7 +386,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if ("@" in combined_lower or "_by_" in combined_lower):
                 if not any(wd in combined_lower for wd in config.sticker_whitelist):
                     safe_title = s_set.title.replace("@", "")
-                    violation_reason = f"未授權 ID ({safe_title})"
+                    violation_reason = f"貼圖包含未授權 ID ({safe_title})"
             else: all_texts.append(s_set.title)
         except: pass
 
@@ -384,38 +412,36 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if violation_reason:
         if msg.media_group_id: config.flagged_media_groups[msg.media_group_id] = datetime.now()
-        
-        # 違規主體判定
-        offender_id = user.id
-        offender_name = user.full_name
-        mention_html = user.mention_html()
-
         try:
             try: await msg.delete(); config.total_deleted_count += 1
             except: pass
             
-            v_count = config.add_violation(chat.id, offender_id)
-            
+            v_count = config.add_violation(msg.chat.id, offender_id)
             if v_count >= config.max_violations:
-                try: await context.bot.restrict_chat_member(chat.id, user.id, ChatPermissions(can_send_messages=False))
-                except: config.add_log("WARN", f"[{chat.title}] 技術禁言失敗")
+                try: 
+                    # 區分封鎖對象
+                    if user:
+                        await context.bot.restrict_chat_member(msg.chat.id, user.id, ChatPermissions(can_send_messages=False))
+                    elif sender_chat:
+                        await context.bot.ban_chat_sender_chat(msg.chat.id, sender_chat.id)
+                except: config.add_log("WARN", f"[{msg.chat.title}] 技術禁言失敗")
                 
-                config.record_blacklist(offender_id, offender_name, chat.id, chat.title)
-                config.add_log("ERROR", f"🦋 {offender_name} 在 [{chat.title}] 違規達上限，封鎖入阿茲卡班")
+                config.record_blacklist(offender_id, offender_name, msg.chat.id, msg.chat.title)
+                config.add_log("ERROR", f"🦋 {offender_name} 在 [{msg.chat.title}] 違規達上限，封鎖入阿茲卡班")
                 await context.bot.send_message(
-                    chat_id=chat.id, 
+                    chat_id=msg.chat.id, 
                     text=f"🦋 <b>霍格華茲禁言通知</b> 🦋\n\n🦉用戶學員：{mention_html}\n🈲發言已多次違反校規。\n🈲已被咒語《阿哇呾喀呾啦》擊殺⚡️\n🪄<b>如被誤殺請待在阿茲卡班內稍等\n並請客服通知鄧不利多校長幫你解禁</b>", 
                     parse_mode=ParseMode.HTML
                 )
             else:
-                sent_warn = await context.bot.send_message(chat.id, f"🦋 <b>霍格華茲警告通知</b> 🦋\n\n🦉用戶學員：{mention_html}\n⚠️違反校規：{violation_reason}\n⚠️違規計次：({v_count}/{config.max_violations})\n🪄<b>多次違規將被黑魔法教授擊殺</b>", parse_mode=ParseMode.HTML)
+                sent_warn = await context.bot.send_message(msg.chat.id, f"🦋 <b>霍格華茲警告通知</b> 🦋\n\n🦉用戶學員：{mention_html}\n⚠️違反校規：{violation_reason}\n⚠️違規計次：({v_count}/{config.max_violations})\n🪄<b>多次違規將被黑魔法教授擊殺</b>", parse_mode=ParseMode.HTML)
                 await asyncio.sleep(config.warning_duration); await sent_warn.delete()
         except: pass
     elif msg.media_group_id and msg.media_group_id in config.flagged_media_groups:
         try: await msg.delete()
         except: pass
     elif not msg.sticker:
-        config.add_log("INFO", f"接收自 {user.first_name}: {(' | '.join(all_texts))[:20]}...")
+        config.add_log("INFO", f"接收自[{msg.chat.title}] - {offender_name}: {(' | '.join(all_texts))[:20]}...")
 
 # --- 5. Flask 後台管理網頁 ---
 app = Flask(__name__)
@@ -450,20 +476,31 @@ def unban_member():
         key = f"{chat_id}_{user_id}"
         member_data = config.blacklist_members.get(key, {})
         user_name = member_data.get("name", f"學員 {user_id}")
-        mention = f'<a href="tg://user?id={user_id}">{user_name}</a>'
+        
+        # 支援頻道身分解封顯示
+        if user_id < 0:
+            mention = f"<b>{user_name}</b>"
+        else:
+            mention = f'<a href="tg://user?id={user_id}">{user_name}</a>'
+            
         async def do_unban():
             try:
-                p = ChatPermissions(can_send_messages=True, can_send_audios=True, can_send_documents=True, can_send_photos=True, can_send_videos=True, can_send_video_notes=True, can_send_voice_notes=True, can_send_polls=True, can_send_other_messages=True, can_add_web_page_previews=True, can_invite_users=True, can_pin_messages=True, can_change_info=True)
-                await config.application.bot.restrict_chat_member(chat.id, user_id, p); await config.application.bot.unban_chat_member(chat.id, user_id, only_if_banned=True)
-                config.reset_violation(chat.id, user_id)
-                config.add_log("SUCCESS", f"🦋 網頁解封 {user_name}，地點 [{member_data.get('chat_title')}]")
+                # 區分身分執行解封
+                if user_id > 0:
+                    p = ChatPermissions(can_send_messages=True, can_send_audios=True, can_send_documents=True, can_send_photos=True, can_send_videos=True, can_send_video_notes=True, can_send_voice_notes=True, can_send_polls=True, can_send_other_messages=True, can_add_web_page_previews=True, can_invite_users=True, can_pin_messages=True, can_change_info=True)
+                    await config.application.bot.restrict_chat_member(chat_id, user_id, p)
+                    await config.application.bot.unban_chat_member(chat_id, user_id, only_if_banned=True)
+                else:
+                    await config.application.bot.unban_chat_sender_chat(chat_id, user_id)
                 
-                # 發送訊息並不刪除
-                await config.application.bot.send_message(
+                config.reset_violation(chat_id, user_id)
+                config.add_log("SUCCESS", f"🦋 網頁解封 {user_name}，地點 [{member_data.get('chat_title')}]")
+                n_msg = await config.application.bot.send_message(
                     chat_id=chat_id, 
                     text=f"🦋 <b>霍格華茲解禁通知</b> 🦋\n🦉用戶學員：{mention}\n✅經由魔法部審判為無罪\n✅已被鳳凰的眼淚治癒返校\n🪄<b>請學員注意勿再違反校規</b>", 
                     parse_mode=ParseMode.HTML
                 )
+                # 不刪除
             except Exception as e: config.add_log("ERROR", f"🦋 解封失敗: {e}")
         if config.loop: asyncio.run_coroutine_threadsafe(do_unban(), config.loop)
     except: pass
