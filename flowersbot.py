@@ -42,14 +42,12 @@ def get_now_tw():
 
 # --- 2. 本地資料持久化管理 (JSON File) ---
 class PersistenceManager:
-    """ 使用 JSON 檔案在伺服器重啟間保存數據 """
     def __init__(self, filename="flowersbot_data.json"):
         self.filename = filename
 
     def save(self, data: dict):
-        """ 將數據寫入檔案 """
         try:
-            # 將 datetime 物件轉為字串以便 JSON 儲存
+            # 序列化 datetime
             serializable_data = self._serialize(data)
             with open(self.filename, 'w', encoding='utf-8') as f:
                 json.dump(serializable_data, f, ensure_ascii=False, indent=2)
@@ -57,7 +55,6 @@ class PersistenceManager:
             logger.error(f"資料儲存失敗: {e}")
 
     def load(self) -> dict:
-        """ 從檔案讀取數據 """
         if not os.path.exists(self.filename):
             return {}
         try:
@@ -69,26 +66,26 @@ class PersistenceManager:
             return {}
 
     def _serialize(self, data):
-        """ 遞迴將 datetime 轉為 isoformat 字串 """
         if isinstance(data, dict):
             return {k: self._serialize(v) for k, v in data.items()}
         elif isinstance(data, list):
             return [self._serialize(v) for v in data]
         elif isinstance(data, datetime):
             return data.isoformat()
-        # 處理 Tuple Key (JSON 不支援 Tuple key，需轉字串)
-        # 這裡針對 violation_tracker 的 (chat_id, user_id) 做特殊處理
         return data
 
     def _deserialize(self, data):
-        """ 遞迴將 isoformat 字串轉回 datetime """
         if isinstance(data, dict):
             new_dict = {}
             for k, v in data.items():
-                # 嘗試解析時間
                 if isinstance(v, str):
                     try:
-                        new_val = datetime.fromisoformat(v)
+                        # 嘗試將 ISO 格式字串轉回 datetime
+                        # 簡單判斷是否像日期格式
+                        if "T" in v and v.count("-") == 2 and v.count(":") >= 2:
+                             new_val = datetime.fromisoformat(v)
+                        else:
+                             new_val = v
                     except:
                         new_val = v
                 else:
@@ -117,7 +114,7 @@ class BotConfig:
             "portaly.cc", "ttt3388.com.tw", "webnode.tw", "ecup78.com", "jktank.net",
             "youtube.com", "youtu.be"
         }
-        
+
         # Telegram ID 白名單
         self.telegram_link_whitelist = {
             "ecup78", "ttt3388", "setlanguage", "ecup788_lulu156", 
@@ -127,15 +124,15 @@ class BotConfig:
             "sanchong168", "xinzhuang168", "taishanwugu168", 
             "zhonghe168", "tucheng_168", "linkou168", "keelung168"
         }
-        
+
         # 貼圖 ID 白名單
         self.sticker_whitelist = {"ecup78_bot", "ecup78"}
-        
+
         # 電話前綴黑名單 (已整合您提供的清單)
         self.blocked_phone_prefixes = {
             "+91", "+86", "+95", "+852", "+60", "+84", "+63", "+1", "+62", "+41", "+44", "+855"
         }
-        
+
         # 關鍵字黑名單 (已整合您提供的清單)
         self.blocked_keywords = {
             # 詐騙/博弈
@@ -165,7 +162,6 @@ class BotConfig:
             "户", "罗", "边", "观", "么", "开", "区", "帅", "费"
         }
         
-        # 狀態資料
         self.violation_tracker: Dict[Tuple[int, int], Dict] = {}
         self.blacklist_members: Dict[str, Dict] = {}
         self.total_deleted_count = 0
@@ -174,32 +170,32 @@ class BotConfig:
         self.flagged_media_groups: Dict[str, datetime] = {}
 
     def load_state(self):
-        """ 從檔案恢復狀態 """
         data = self.pm.load()
         if data:
-            # 恢復黑名單
             self.blacklist_members = data.get("blacklist", {})
-            # 恢復違規計數 (需處理 Tuple Key 字串化問題)
+            # 恢復 tracker (字串 key 轉回 tuple)
             raw_tracker = data.get("tracker", {})
             for k, v in raw_tracker.items():
                 try:
-                    # k 格式為 "chat_id,user_id"
                     parts = k.split(',')
                     if len(parts) == 2:
                         self.violation_tracker[(int(parts[0]), int(parts[1]))] = v
                 except: pass
             
-            self.total_deleted_count = data.get("stats", {}).get("deleted", 0)
+            # 確保時間欄位是 datetime
+            for k, v in self.blacklist_members.items():
+                if isinstance(v.get("time"), str):
+                     try: v["time"] = datetime.fromisoformat(v["time"])
+                     except: v["time"] = get_now_tw()
+                     
             self.add_log("INFO", f"🦋 系統重啟，已恢復 {len(self.blacklist_members)} 筆黑名單資料")
 
     def save_state(self):
-        """ 儲存當前狀態 """
-        # 將 Tuple Key 轉為字串以利 JSON 儲存
         tracker_serializable = {f"{k[0]},{k[1]}": v for k, v in self.violation_tracker.items()}
         data = {
             "blacklist": self.blacklist_members,
             "tracker": tracker_serializable,
-            "stats": {"deleted": self.total_deleted_count}
+            "timestamp": get_now_tw().isoformat()
         }
         Thread(target=self.pm.save, args=(data,), daemon=True).start()
 
@@ -217,7 +213,7 @@ class BotConfig:
         else:
             self.violation_tracker[key]["count"] += 1
         
-        self.save_state() # 立即儲存
+        self.save_state()
         return self.violation_tracker[key]["count"]
 
     def record_blacklist(self, user_id: int, name: str, chat_id: int, chat_title: str):
@@ -227,25 +223,26 @@ class BotConfig:
             "uid": user_id, "name": name, "chat_id": chat_id, 
             "chat_title": chat_title, "time": now
         }
-        self.save_state() # 立即儲存
+        self.save_state()
 
     def reset_violation(self, chat_id: int, user_id: int):
         v_key = (chat_id, user_id)
         bl_key = f"{chat_id}_{user_id}"
         if v_key in self.violation_tracker: self.violation_tracker[v_key]["count"] = 0
         if bl_key in self.blacklist_members: del self.blacklist_members[bl_key]
-        self.save_state() # 立即儲存
+        self.save_state()
 
     def get_recent_blacklist(self, filter_chat_id: Optional[int] = None) -> List[Dict]:
         now = get_now_tw()
         recent = []
         for key, info in self.blacklist_members.items():
             try:
-                # 確保時間物件正確
-                if isinstance(info["time"], str):
-                    info["time"] = datetime.fromisoformat(info["time"])
-                    
-                if (now - info["time"]).total_seconds() < 86400: 
+                # 確保 time 是 datetime
+                t = info.get("time")
+                if not isinstance(t, datetime):
+                     t = datetime.fromisoformat(t) if t else now
+                
+                if (now - t).total_seconds() < 86400: 
                     if filter_chat_id is None or info["chat_id"] == filter_chat_id:
                         recent.append(info)
             except: continue
@@ -333,21 +330,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif hasattr(msg.forward_origin, 'sender_user') and msg.forward_origin.sender_user:
             src_name = msg.forward_origin.sender_user.full_name
         if src_name:
-            all_texts.append(src_name) 
+            all_texts.append(src_name)
             is_bad_src, src_reason = contains_prohibited_content(src_name)
             if is_bad_src:
                 violation_reason = f"轉傳來源違規 ({src_name})"
 
-    # 按鈕與投票
-    if msg.reply_markup and hasattr(msg.reply_markup, 'inline_keyboard'):
-        for row in msg.reply_markup.inline_keyboard:
-            for btn in row:
-                if hasattr(btn, 'text'): all_texts.append(btn.text)
-    if msg.poll:
-        all_texts.append(msg.poll.question)
-        for opt in msg.poll.options: all_texts.append(opt.text)
-
-    # 聯絡人
+    # 聯絡人偵測
     if not violation_reason and msg.contact:
         phone = msg.contact.phone_number or ""
         clean_phone = re.sub(r'[+\-\s]', '', phone)
@@ -357,12 +345,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if msg.contact.first_name: all_texts.append(msg.contact.first_name)
         if msg.contact.last_name: all_texts.append(msg.contact.last_name)
     
-    # 地點
+    # 地點偵測
     if not violation_reason and msg.venue:
         if msg.venue.title: all_texts.append(msg.venue.title)
         if msg.venue.address: all_texts.append(msg.venue.address)
 
-    # 貼圖
+    # 貼圖偵測
     if not violation_reason and msg.sticker:
         try:
             s_set = await context.bot.get_sticker_set(msg.sticker.set_name)
@@ -396,33 +384,38 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if violation_reason:
         if msg.media_group_id: config.flagged_media_groups[msg.media_group_id] = datetime.now()
+        
+        # 違規主體判定
+        offender_id = user.id
+        offender_name = user.full_name
+        mention_html = user.mention_html()
+
         try:
             try: await msg.delete(); config.total_deleted_count += 1
             except: pass
             
-            # 使用 user.id 作為違規主體
-            v_count = config.add_violation(chat.id, user.id)
+            v_count = config.add_violation(chat.id, offender_id)
             
             if v_count >= config.max_violations:
                 try: await context.bot.restrict_chat_member(chat.id, user.id, ChatPermissions(can_send_messages=False))
                 except: config.add_log("WARN", f"[{chat.title}] 技術禁言失敗")
                 
-                config.record_blacklist(user.id, user.full_name, chat.id, chat.title)
-                config.add_log("ERROR", f"🦋 學員 {user.full_name} 在 [{chat.title}] 違規達上限，封鎖入阿茲卡班")
+                config.record_blacklist(offender_id, offender_name, chat.id, chat.title)
+                config.add_log("ERROR", f"🦋 {offender_name} 在 [{chat.title}] 違規達上限，封鎖入阿茲卡班")
                 await context.bot.send_message(
                     chat_id=chat.id, 
-                    text=f"🦋 <b>霍格華茲禁言通知</b> 🦋\n\n🦉用戶學員：{user.mention_html()}\n🈲發言已多次違反校規。\n🈲已被咒語《阿哇呾喀呾啦》擊殺⚡️\n🪄<b>如被誤殺請待在阿茲卡班內稍等\n並請客服通知鄧不利多校長幫你解禁</b>", 
+                    text=f"🦋 <b>霍格華茲禁言通知</b> 🦋\n\n🦉用戶學員：{mention_html}\n🈲發言已多次違反校規。\n🈲已被咒語《阿哇呾喀呾啦》擊殺⚡️\n🪄<b>如被誤殺請待在阿茲卡班內稍等\n並請客服通知鄧不利多校長幫你解禁</b>", 
                     parse_mode=ParseMode.HTML
                 )
             else:
-                sent_warn = await context.bot.send_message(chat.id, f"🦋 <b>霍格華茲警告通知</b> 🦋\n\n🦉用戶學員：{user.mention_html()}\n⚠️違反校規：{violation_reason}\n⚠️違規計次：({v_count}/{config.max_violations})\n🪄<b>多次違規將被黑魔法教授擊殺</b>", parse_mode=ParseMode.HTML)
+                sent_warn = await context.bot.send_message(chat.id, f"🦋 <b>霍格華茲警告通知</b> 🦋\n\n🦉用戶學員：{mention_html}\n⚠️違反校規：{violation_reason}\n⚠️違規計次：({v_count}/{config.max_violations})\n🪄<b>多次違規將被黑魔法教授擊殺</b>", parse_mode=ParseMode.HTML)
                 await asyncio.sleep(config.warning_duration); await sent_warn.delete()
         except: pass
     elif msg.media_group_id and msg.media_group_id in config.flagged_media_groups:
         try: await msg.delete()
         except: pass
     elif not msg.sticker:
-        config.add_log("INFO", f"接收自 [{chat.title}] - {user.first_name}: {(' | '.join(all_texts))[:20]}...")
+        config.add_log("INFO", f"接收自 {user.first_name}: {(' | '.join(all_texts))[:20]}...")
 
 # --- 5. Flask 後台管理網頁 ---
 app = Flask(__name__)
@@ -445,7 +438,7 @@ def update():
         config.blocked_phone_prefixes = {p.strip() for p in request.form.get('phone_pre', '').split(',') if p.strip()}
         config.blocked_keywords = {k.strip() for k in request.form.get('keywords', '').split(',') if k.strip()}
         config.sticker_whitelist = {s.strip().lower().replace("@", "") for s in request.form.get('sticker_ws', '').split(',') if s.strip()}
-        config.save_state() # 設定變更時立即存檔
+        config.save_state() # 立即存檔
         config.add_log("SUCCESS", "🦋 所有校規與過濾設定已同步更新")
     except Exception as e: config.add_log("ERROR", f"🦋 更新失敗: {e}")
     return redirect(url_for('index'))
@@ -464,7 +457,9 @@ def unban_member():
                 await config.application.bot.restrict_chat_member(chat.id, user_id, p); await config.application.bot.unban_chat_member(chat.id, user_id, only_if_banned=True)
                 config.reset_violation(chat.id, user_id)
                 config.add_log("SUCCESS", f"🦋 網頁解封 {user_name}，地點 [{member_data.get('chat_title')}]")
-                n_msg = await config.application.bot.send_message(
+                
+                # 發送訊息並不刪除
+                await config.application.bot.send_message(
                     chat_id=chat_id, 
                     text=f"🦋 <b>霍格華茲解禁通知</b> 🦋\n🦉用戶學員：{mention}\n✅經由魔法部審判為無罪\n✅已被鳳凰的眼淚治癒返校\n🪄<b>請學員注意勿再違反校規</b>", 
                     parse_mode=ParseMode.HTML
@@ -496,7 +491,7 @@ DASHBOARD_HTML = """
                 <p class="text-slate-400 text-xs">今日攔截總數</p><h2 class="text-4xl font-black">{{ config.total_deleted_count }}</h2>
             </div>
             <div class="bg-slate-800 p-4 rounded-2xl border border-slate-700 shadow-lg text-center">
-                <p class="text-slate-400 text-xs">有效黑名單筆數</p><h2 class="text-4xl font-black text-rose-500">{{ members | length }}</h2>
+                <p class="text-slate-400 text-xs">雲端黑名單筆數</p><h2 class="text-4xl font-black text-rose-500">{{ members | length }}</h2>
             </div>
         </div>
         <div class="grid grid-cols-1 lg:grid-cols-12 gap-8">
