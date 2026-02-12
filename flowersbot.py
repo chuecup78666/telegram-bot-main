@@ -127,12 +127,12 @@ class BotConfig:
         # 貼圖 ID 白名單
         self.sticker_whitelist = {"ecup78_bot", "ecup78"}
 
-        # 電話前綴黑名單 (已整合您提供的清單)
+        # 電話前綴黑名單
         self.blocked_phone_prefixes = {
             "+91", "+86", "+95", "+852", "+60", "+84", "+63", "+1", "+62", "+41", "+44", "+855"
         }
 
-        # 關鍵字黑名單 (已整合您提供的清單)
+        # 關鍵字黑名單
         self.blocked_keywords = {
             # 詐騙/博弈
             "假钞", "捡钱", "项目", "電報", "@xsm77788", "君临",
@@ -143,7 +143,7 @@ class BotConfig:
             # 個資/黑產
             "查档", "身份证", "户籍", "开房", "定位", "手机号", "机主", 
             "轨迹", "车队", "入款", "出款",
-            # 色情/引流 (針對截圖強化)
+            # 色情/引流
             "迷药", "春药", "裸聊", "极品", "强奸", "销魂", 
             "约炮", "同城", "资源", "人兽", "皮肤", "萌酱",
             "萝莉", "爆炒", "做坏事", "蜜桃臀", "路边", "坏事", 
@@ -467,7 +467,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     parse_mode=ParseMode.HTML
                 )
             else:
-                sent_warn = await context.bot.send_message(msg.chat.id, f"🦋 <b>霍格華茲警告通知</b> 🦋\n\n🦉用戶學員：{mention_html}\n⚠️違反校規：{violation_reason}\n⚠️違規計次：({v_count}/{config.max_violations})\n🪄<b>多次違規將被黑魔法教師擊殺</b>", parse_mode=ParseMode.HTML)
+                sent_warn = await context.bot.send_message(msg.chat.id, f"🦋 <b>霍格華茲警告通知</b> 🦋\n\n🦉用戶學員：{mention_html}\n⚠️違反校規：{violation_reason}\n⚠️違規計次：({v_count}/{config.max_violations})\n🪄<b>多次違規將被黑魔法教授擊殺</b>", parse_mode=ParseMode.HTML)
                 await asyncio.sleep(config.warning_duration); await sent_warn.delete()
         except: pass
     elif msg.media_group_id and msg.media_group_id in config.flagged_media_groups:
