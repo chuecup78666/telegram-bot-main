@@ -211,7 +211,7 @@ class BotConfig:
             "临", "宫", "际", "备"
         }
         
-        # 指定豁免檢查的 VIP 用戶 ID (發言不受任何過濾規則限制)
+        # 指定豁免檢查的 戰鬥群夥伴 VIP 用戶 ID (發言不受任何過濾規則限制)
         self.exempt_user_ids = {
             7363979036, 6168587103, 6660718633, 5152410443,
             1121824397, 739962535, 6176254570, 5074058687,
@@ -472,9 +472,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # --- 3. 管理員與白名單豁免檢查 (在 Log 之後) ---
     if user:
-        # 檢查是否為 VIP 白名單用戶
+        # 檢查是否為 戰鬥群夥伴 VIP 白名單用戶
         if user.id in config.exempt_user_ids:
-            config.add_log("SYSTEM", f"VIP 用戶 {offender_name} 豁免，不執行攔截")
+            config.add_log("SYSTEM", f"戰鬥群夥伴 {offender_name} 豁免，不執行攔截")
             return
 
         # 檢查是否為群組管理員
