@@ -1,5 +1,6 @@
 from flask import Flask, render_template_string, request, redirect, url_for
-from telegram import ChatPermissions, ParseMode
+from telegram import ChatPermissions
+from telegram.constants import ParseMode
 import asyncio
 from config import config, get_now_tw, logger
 
