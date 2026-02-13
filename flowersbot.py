@@ -3,6 +3,7 @@ import logging
 import asyncio
 import re
 from threading import Thread
+from typing import Tuple, Optional, List
 
 # 引用我們拆分出去的模組
 from flask import Flask
