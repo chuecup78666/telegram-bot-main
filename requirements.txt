@@ -6,4 +6,5 @@ tzdata>=2024.1
 requests==2.31.0
 opencc-python-reimplemented==0.1.7
 gunicorn==23.0.0
+waitress==3.0.0
 pytz
