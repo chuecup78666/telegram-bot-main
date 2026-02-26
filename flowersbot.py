@@ -174,7 +174,7 @@ class BotConfig:
         }
 
         # 貼圖包白名單
-        self.sticker_whitelist = {"ecup78_bot", "ecup78"}
+        self.sticker_whitelist = {"ecup78_bot", "ecup78", "ttt3388"}
 
         # 電話前綴黑名單
         self.blocked_phone_prefixes = {
