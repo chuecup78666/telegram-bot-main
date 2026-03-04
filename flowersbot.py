@@ -11,6 +11,7 @@ from threading import Thread
 # --- Web 框架 ---
 # 用於建立後台管理網頁，讓 Render 偵測到 Port 不會休眠
 from flask import Flask, render_template_string, request, redirect, url_for
+from waitress import serve
 
 # --- Telegram 機器人核心模組 ---
 from telegram import Update, MessageEntity, ChatPermissions
@@ -203,7 +204,7 @@ class BotConfig:
             "置顶", "软件", "下载", "点击", "链接", "免费观看", "点击下方"
         }
 
-        # 絕對簡體字表 (加入截圖中的 临, 宫, 际, 务, 员)
+        # 絕對簡體字表
         self.strict_simplified_chars = {
             "国", "会", "发", "现", "关", "质", "员", "机", "产", "气", 
             "实", "则", "两", "结", "营", "报", "种", "专", "务", "战",
@@ -308,7 +309,7 @@ class BotConfig:
                 t = info.get("time")
                 if not isinstance(t, datetime):
                      t = datetime.fromisoformat(t) if t else now
-                if (now - t).total_seconds() < 86400: # 24小時
+                if (now - t).total_seconds() < 86400: 
                     if filter_chat_id is None or info["chat_id"] == filter_chat_id:
                         recent.append(info)
             except: continue
@@ -335,23 +336,27 @@ def contains_prohibited_content(text: str) -> Tuple[bool, Optional[str]]:
     """ 檢查文字內容是否違規 (回傳: 是否違規, 原因) """
     if not text: return False, None
     
+    # 文字淨化：移除所有空白、換行與隱形字元 (防駭客分割字串)
+    clean_text = re.sub(r'\s+|\u200b|\u200c|\u200d|\ufeff', '', text)
+    
     # 1. 關鍵字攔截 (優先級最高)
     for kw in config.blocked_keywords:
-        if kw in text: return True, f"關鍵字: {kw}"
-
-    # 2. 絕對簡體字表 (只要出現一個就殺)
-    for char in text:
-        if char in config.strict_simplified_chars:
-            return True, f"禁語: {char}"
-
-    # 3. 傳統簡體字庫偵測
-    try:
-        if hanzidentifier.has_chinese(text):
-            for char in text:
-                if char in config.strict_simplified_chars: return True, f"禁語: {char}"
+        if kw in text or kw in clean_text: 
+            return True, f"關鍵字: {kw}"
+            
+    # 簡體字掃描
+    if hanzidentifier.has_chinese(clean_text):
+        for char in clean_text:
+            # 絕對簡體字攔截
+            if char in config.strict_simplified_chars:
+                return True, f"禁語: {char}"
+            # 傳統簡體字辨識 (單字過濾，防 Emoji 報錯)
+            try:
                 if hanzidentifier.is_simplified(char) and not hanzidentifier.is_traditional(char):
                     return True, f"簡體: {char}"
-    except: pass
+            except:
+                continue
+                
     return False, None
 
 async def unban_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -395,10 +400,11 @@ async def unban_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """ 處理所有進入群組的訊息 (核心過濾器) """
     config.last_heartbeat = get_now_tw()
-    if not update.message: return
-    msg = update.message
     
-    # 獲取發送者資訊 (支援一般用戶與頻道身分)
+    # [核心修復] 同時監聽「新訊息」與「被編輯過的訊息」
+    msg = update.message or update.edited_message
+    if not msg: return
+    
     user = msg.from_user
     sender_chat = msg.sender_chat
     
@@ -472,7 +478,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # --- 2. 記錄 Log (即使是管理員也會紀錄) ---
     full_content_log = " | ".join(all_texts)
-    config.add_log("INFO", f"[{msg.chat.title}] [{offender_name}] 偵測: {full_content_log[:50]}...")
+    config.add_log("INFO", f"[{msg.chat.title}] [{offender_name}]{is_edit_tag} 偵測: {full_content_log[:50]}...")
 
     # --- 3. 管理員與白名單豁免檢查 (在 Log 之後) ---
     if user:
@@ -485,6 +491,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             if msg.chat.type != "private":
                 cm = await msg.chat.get_member(user.id)
+                # 判斷是否為管理員或群主
                 if cm.status in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]: 
                     config.add_log("SYSTEM", f"管理員 {offender_name} 豁免，不執行攔截")
                     return 
@@ -500,9 +507,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # A. 轉傳來源檢查
     if msg.forward_origin:
+        src_name = ""
+        if hasattr(msg.forward_origin, 'chat') and msg.forward_origin.chat:
+             src_name = msg.forward_origin.chat.title
+        elif hasattr(msg.forward_origin, 'sender_user') and msg.forward_origin.sender_user:
+             src_name = msg.forward_origin.sender_user.full_name
+        
         if src_name:
-            is_bad_src, src_reason = contains_prohibited_content(src_name)
-            if is_bad_src: violation_reason = f"轉傳來源違規 ({src_name})"
+             is_bad, r = contains_prohibited_content(src_name)
+             if is_bad: violation_reason = f"轉傳來源違規 ({src_name})"
 
     # B. 電話號碼檢查
     if not violation_reason and msg.contact:
@@ -746,11 +759,15 @@ def run_telegram_bot():
             config.add_log("INFO", "🦋 Telegram 通訊連線成功，系統已準備就緒。")
         loop.run_until_complete(clear())
         bot_app.add_handler(CommandHandler("unban", unban_handler))
+        
+        # [關鍵修復] 同時攔截「一般訊息」與「編輯過的訊息」
         bot_app.add_handler(MessageHandler(filters.ALL & (~filters.COMMAND), handle_message))
+        bot_app.add_handler(MessageHandler(filters.UpdateType.EDITED_MESSAGE & (~filters.COMMAND), handle_message))
+        
         bot_app.run_polling(stop_signals=False, close_loop=False)
     except Exception as e: config.add_log("ERROR", f"🦋 核心崩潰: {e}")
 
 if __name__ == '__main__':
     tg_thread = Thread(target=run_telegram_bot, daemon=True)
     tg_thread.start()
-    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 10000)))
+    serve(app, host='0.0.0.0', port=int(os.environ.get("PORT", 10000)))
