@@ -101,7 +101,6 @@ class PersistenceManager:
                 with open(self.filename, 'r', encoding='utf-8') as f:
                     data = json.load(f)
                     logger.info("✅ 成功從本地檔案恢復資料！")
-                    
         except Exception as e:
             logger.error(f"資料讀取失敗: {e}")
             
@@ -356,6 +355,8 @@ def contains_prohibited_content(text: str) -> Tuple[bool, Optional[str]]:
                 (0xAC00 <= cp <= 0xD7A3) or (0x1100 <= cp <= 0x11FF) or (0x3130 <= cp <= 0x318F) or # 韓文
                 (0x4E00 <= cp <= 0x9FFF) or (0x3400 <= cp <= 0x4DBF) or (0x20000 <= cp <= 0x2EBEF) or # 中文/漢字
                 (0x3100 <= cp <= 0x312F) or  # 注音符號 (台灣常用)
+                (0x31A0 <= cp <= 0x31BF) or  # 注音符號擴展
+                (0x02B0 <= cp <= 0x02FF) or  # 聲調與間距修飾符號 (包含 ˉ, ˊ, ˇ, ˋ, ˙ 等注音聲調)
                 (0xFF21 <= cp <= 0xFF3A) or (0xFF41 <= cp <= 0xFF5A)     # 全形英文字母
             )
             # 如果發現不屬於上述語系的字元 (如俄文、阿拉伯文、印尼文、越南文等)
