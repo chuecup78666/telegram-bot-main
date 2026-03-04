@@ -683,7 +683,16 @@ def index():
 # [新增] 專門用來給前端 AJAX 抓取最新 Log 的 API
 @app.route('/api/logs')
 def get_logs():
-    return jsonify(config.logs)
+    try:
+        # 1. 建立一個陣列淺拷貝，避免與背景 Telegram 執行緒發生讀寫衝突 (Thread-Safety)
+        logs_data = list(config.logs)
+        # 2. 強制使用標準 json.dumps 並設定 header，避免 jsonify 在部分版本發生的相容性錯誤
+        return Response(json.dumps(logs_data), mimetype='application/json')
+    except Exception as e:
+        logger.error(f"API /api/logs 發生內部錯誤: {e}")
+        # 如果還是報錯，將錯誤訊息回傳給前端顯示，而不是拋出 500 導致畫面卡住
+        error_log = [{"time": "系統", "level": "ERROR", "content": f"獲取日誌時發生內部錯誤: {str(e)}"}]
+        return Response(json.dumps(error_log), status=500, mimetype='application/json')
 
 @app.route('/update', methods=['POST'])
 def update():
