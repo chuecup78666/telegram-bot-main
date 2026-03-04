@@ -670,7 +670,8 @@ def index():
     filter_cid = request.args.get('filter_chat_id', type=int)
     members = config.get_recent_blacklist(filter_cid)
     filter_chats = config.get_blacklist_chats()
-    # 讀取獨立的 HTML UI 檔案
+    
+    # 讀取拆分出去的 UI 檔案
     try:
         with open('dashboard_ui.html', 'r', encoding='utf-8') as f:
             html_template = f.read()
@@ -679,6 +680,10 @@ def index():
         
     return render_template_string(html_template, config=config, is_active=is_active, members=members, filter_chats=filter_chats, active_filter=filter_cid)
 
+# [新增] 專門用來給前端 AJAX 抓取最新 Log 的 API
+@app.route('/api/logs')
+def get_logs():
+    return jsonify(config.logs)
 
 @app.route('/update', methods=['POST'])
 def update():

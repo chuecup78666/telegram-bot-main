@@ -62,12 +62,39 @@
                 <div class="bg-slate-800 p-6 rounded-2xl border border-slate-700 shadow-xl">
                     <div class="flex justify-between items-center mb-4">
                         <h3 class="text-lg font-bold text-sky-300">📝 違規 Log 紀錄</h3>
-                        <button onclick="location.reload()" class="text-[10px] text-sky-400 border border-sky-400 px-2 py-0.5 rounded hover:bg-sky-400 hover:text-white transition-all font-bold">刷新日誌</button>
+                        <span class="text-[10px] text-emerald-400 flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span> 自動更新中</span>
                     </div>
-                    <div class="terminal rounded p-2 shadow-inner">{% for log in config.logs %}<div><span class="text-slate-500">[{{ log.time }}]</span> <span class="text-{{ 'rose-400' if log.level=='ERROR' else 'sky-400' }}">[{{ log.level }}]</span> {{ log.content }}</div>{% endfor %}</div>
+                    <!-- 這裡交給 Javascript 動態載入，實現不刷新跳紀錄 -->
+                    <div class="terminal rounded p-2 shadow-inner" id="log-terminal">
+                        <div class="text-slate-500">連線中...</div>
+                    </div>
                 </div>
             </div>
         </div>
     </div>
+    
+    <!-- 自動更新 Log 的腳本 -->
+    <script>
+        function fetchLogs() {
+            fetch('/api/logs')
+                .then(response => response.json())
+                .then(logs => {
+                    const terminal = document.getElementById('log-terminal');
+                    terminal.innerHTML = '';
+                    logs.forEach(log => {
+                        const colorClass = log.level === 'ERROR' ? 'rose-400' : 'sky-400';
+                        const div = document.createElement('div');
+                        // 安全渲染，防止 XSS
+                        div.innerHTML = `<span class="text-slate-500">[${log.time}]</span> <span class="text-${colorClass}">[${log.level}]</span> ${log.content}`;
+                        terminal.appendChild(div);
+                    });
+                })
+                .catch(err => console.error("抓取 Log 失敗", err));
+        }
+        // 初次載入
+        fetchLogs();
+        // 每 3 秒自動背景拉取一次
+        setInterval(fetchLogs, 3000);
+    </script>
 </body>
 </html>
