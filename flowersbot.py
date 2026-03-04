@@ -670,7 +670,15 @@ def index():
     filter_cid = request.args.get('filter_chat_id', type=int)
     members = config.get_recent_blacklist(filter_cid)
     filter_chats = config.get_blacklist_chats()
-    return render_template_string(DASHBOARD_HTML, config=config, is_active=is_active, members=members, filter_chats=filter_chats, active_filter=filter_cid)
+    # 讀取獨立的 HTML UI 檔案
+    try:
+        with open('dashboard_ui.html', 'r', encoding='utf-8') as f:
+            html_template = f.read()
+    except FileNotFoundError:
+        html_template = "<h1>找不到 dashboard_ui.html 檔案，請確認檔案已上傳。</h1>"
+        
+    return render_template_string(html_template, config=config, is_active=is_active, members=members, filter_chats=filter_chats, active_filter=filter_cid)
+
 
 @app.route('/update', methods=['POST'])
 def update():
