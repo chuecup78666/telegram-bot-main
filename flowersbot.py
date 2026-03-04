@@ -249,7 +249,8 @@ class BotConfig:
                 if isinstance(v.get("time"), str):
                      try: v["time"] = datetime.fromisoformat(v["time"])
                      except: v["time"] = get_now_tw()
-                     
+            
+            self.total_deleted_count = data.get("stats", {}).get("deleted", 0)
             self.add_log("INFO", f"🦋 系統重啟，已恢復 {len(self.blacklist_members)} 筆黑名單資料")
 
     def save_state(self):
@@ -426,7 +427,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         return 
 
-    if is_bot: return # 忽略機器人
+    if is_bot: return 
 
     # --- 1. 提取所有文字內容 (合併掃描) ---
     all_texts: List[str] = []
@@ -476,11 +477,21 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if hasattr(quote, 'text') and quote.text: all_texts.append(quote.text)
         if hasattr(quote, 'caption') and quote.caption: all_texts.append(quote.caption)
 
-    # --- 2. 記錄 Log (即使是管理員也會紀錄) ---
+    # 記錄 Log (加入編輯標示，方便查閱，並確保空訊息也有提示)
+    is_edit_tag = " (編輯訊息)" if update.edited_message else ""
     full_content_log = " | ".join(all_texts)
-    config.add_log("INFO", f"[{msg.chat.title}] [{offender_name}]{is_edit_tag} 偵測: {full_content_log[:50]}...")
+    
+    if not full_content_log:
+        if msg.sticker:
+            full_content_log = f"<貼圖: {msg.sticker.set_name}>"
+        elif msg.photo or msg.video or msg.animation or msg.document:
+            full_content_log = "<媒體檔案>"
+        else:
+            full_content_log = "<無文字或無法識別的內容>"
 
-    # --- 3. 管理員與白名單豁免檢查 (在 Log 之後) ---
+    config.add_log("INFO", f"[{msg.chat.title}] [{offender_name}]{is_edit_tag} 偵測: {full_content_log[:100]}...")
+
+    # --- 3. 管理員與 VIP 豁免檢查 ---
     if user:
         # 檢查是否為 戰鬥群夥伴 VIP 白名單用戶
         if user.id in config.exempt_user_ids:
