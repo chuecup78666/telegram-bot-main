@@ -6,11 +6,12 @@ import re
 import requests
 from datetime import datetime, timedelta, timezone
 from typing import Set, Optional, Dict, List, Tuple
-from threading import Thread
+# [修復] 新增 Lock 用於解決多執行緒讀寫衝突
+from threading import Thread, Lock
 
 # --- Web 框架 ---
 # 用於建立後台管理網頁，讓 Render 偵測到 Port 不會休眠
-from flask import Flask, render_template_string, request, redirect, url_for
+from flask import Flask, render_template_string, request, redirect, url_for, jsonify, Response
 from waitress import serve
 
 # --- Telegram 機器人核心模組 ---
@@ -229,6 +230,8 @@ class BotConfig:
         self.blacklist_members: Dict[str, Dict] = {}
         self.total_deleted_count = 0
         self.logs: List[Dict] = []
+        # [修復] 新增執行緒鎖，確保日誌讀寫安全
+        self.log_lock = Lock()
         self.last_heartbeat: Optional[datetime] = None
         self.flagged_media_groups: Dict[str, datetime] = {}
 
@@ -269,8 +272,10 @@ class BotConfig:
     def add_log(self, level: str, message: str):
         """ 新增後台 Log """
         now = get_now_tw().strftime("%H:%M:%S")
-        self.logs.insert(0, {"time": now, "level": level, "content": message})
-        self.logs = self.logs[:50] # 保留最近 50 筆紀錄
+        # [修復] 使用鎖來保護對 self.logs 陣列的修改
+        with self.log_lock:
+            self.logs.insert(0, {"time": now, "level": level, "content": message})
+            self.logs = self.logs[:50] # 保留最近 50 筆紀錄
         logger.info(f"[{level}] {message}")
 
     def add_violation(self, chat_id: int, user_id: int) -> int:
@@ -680,19 +685,21 @@ def index():
         
     return render_template_string(html_template, config=config, is_active=is_active, members=members, filter_chats=filter_chats, active_filter=filter_cid)
 
-# [新增] 專門用來給前端 AJAX 抓取最新 Log 的 API
+# [修復] 專門用來給前端 AJAX 抓取最新 Log 的 API (加入執行緒鎖與強力防崩潰機制)
 @app.route('/api/logs')
 def get_logs():
     try:
-        # 1. 建立一個陣列淺拷貝，避免與背景 Telegram 執行緒發生讀寫衝突 (Thread-Safety)
-        logs_data = list(config.logs)
-        # 2. 強制使用標準 json.dumps 並設定 header，避免 jsonify 在部分版本發生的相容性錯誤
-        return Response(json.dumps(logs_data), mimetype='application/json')
+        # 使用 lock 鎖住陣列，等待背景機器人寫入完畢後再讀取，確保 Thread-Safety
+        with config.log_lock:
+            logs_data = list(config.logs)
+            
+        # 使用 json.dumps 時加入 ensure_ascii=False，避免處理 Emoji 或特殊字元時報錯
+        return Response(json.dumps(logs_data, ensure_ascii=False), mimetype='application/json')
     except Exception as e:
         logger.error(f"API /api/logs 發生內部錯誤: {e}")
-        # 如果還是報錯，將錯誤訊息回傳給前端顯示，而不是拋出 500 導致畫面卡住
-        error_log = [{"time": "系統", "level": "ERROR", "content": f"獲取日誌時發生內部錯誤: {str(e)}"}]
-        return Response(json.dumps(error_log), status=500, mimetype='application/json')
+        # 即使發生錯誤，也強制回傳 200 OK，把 Python 錯誤原因印在網頁畫面上，而不是報 500 讓網頁死當
+        error_log = [{"time": "系統", "level": "ERROR", "content": f"內部伺服器資料讀取錯誤: {str(e)}"}]
+        return Response(json.dumps(error_log, ensure_ascii=False), status=200, mimetype='application/json')
 
 @app.route('/update', methods=['POST'])
 def update():
