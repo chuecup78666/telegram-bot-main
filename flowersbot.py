@@ -190,18 +190,20 @@ class BotConfig:
             "上压", "担保", "兼职", "手气", "撸金", "暴利", "押金", "包赚",
             "风口", "一单", "博彩", "彩票", "赛车", "飞艇", "哈希",
             "百家乐", "投资", "USDT", "TRX", "包过", "洗米", "跑分",
-            "现场", "连连", "满", "澳门", "新澳", "风险", "搞d",
-            "没有风险", "带撸", "绿色项目", "纯绿色", "无风险", "不用押金", "最稳", "提款到账",
+            "现场", "连连", "满", "澳门", "新澳", "风险", "搞d", "集团",
+            "总代", "直招", "南宫", "充值", "撸金", "暴利", "押金", 
+            "提款", "到账","没有风险", "带撸", "绿色项目", "纯绿色", "无风险", 
+            "不用押金", "最稳", "提款到账",
             # 個資/黑產
             "查档", "身份证", "户籍", "开房", "手机号", "机主", 
             "轨迹", "车队", "入款", "出款",
             # 色情/引流
-            "迷药", "春药", "裸聊", "极品", "强奸", "陪唱", 
-            "约炮", "同城", "吃肉", "资源", "人兽",
-            "萝莉", "爆炒", "做坏事", "蜜桃臀", "户外", "萌酱", "皮肤", "路边", "坏事",
-            "看B", "看b", "BB", "bb", "痒", 
+            "迷药", "春药", "裸聊", "极品", "强奸", "销魂", 
+            "约炮", "同城", "资源", "人兽", "皮肤", "萌酱",
+            "萝莉", "爆炒", "做坏事", "蜜桃臀", "路边", "坏事", 
+            "看B", "看b", "BB", "bb", "痒", "皮肤", 
             # 簡體高頻詞
-            "置顶", "软件", "下载", "点击", "链接", "免费观看", "点击下方", "无押", "搞米", "主页",
+            "置顶", "软件", "下载", "点击", "链接", "免费观看", "点击下方",
             # 新增拼音與短語規避詞
             "好 lu", "ju 金", "秒反", "秒返", "lu金", "带lu"
         }
@@ -338,15 +340,34 @@ def contains_prohibited_content(text: str) -> Tuple[bool, Optional[str]]:
     """ 檢查文字內容是否違規 (回傳: 是否違規, 原因) """
     if not text: return False, None
     
-    # 文字淨化：移除所有空白、換行與隱形字元 (防駭客分割字串)
+    # 步驟 1：文字淨化，移除所有空白、換行與隱形字元 (防駭客分割字串)
     clean_text = re.sub(r'\s+|\u200b|\u200c|\u200d|\ufeff', '', text)
     
-    # 1. 關鍵字攔截 (優先級最高)
+    # 步驟 2：語言白名單限制 (嚴格檢查每一個字元)
+    for char in clean_text:
+        # 如果是字母/文字 (isalpha()=True 會排除標點、數字、Emoji)
+        if char.isalpha():
+            cp = ord(char)
+            # 定義允許的 Unicode 範圍：英文, 泰文, 日文, 韓文, 漢字, 注音符號
+            is_allowed_lang = (
+                (0x0041 <= cp <= 0x005A) or (0x0061 <= cp <= 0x007A) or  # 英文 (A-Z, a-z)
+                (0x0E00 <= cp <= 0x0E7F) or  # 泰文
+                (0x3040 <= cp <= 0x30FF) or  # 日文 (平假名/片假名)
+                (0xAC00 <= cp <= 0xD7A3) or (0x1100 <= cp <= 0x11FF) or (0x3130 <= cp <= 0x318F) or # 韓文
+                (0x4E00 <= cp <= 0x9FFF) or (0x3400 <= cp <= 0x4DBF) or (0x20000 <= cp <= 0x2EBEF) or # 中文/漢字
+                (0x3100 <= cp <= 0x312F) or  # 注音符號 (台灣常用)
+                (0xFF21 <= cp <= 0xFF3A) or (0xFF41 <= cp <= 0xFF5A)     # 全形英文字母
+            )
+            # 如果發現不屬於上述語系的字元 (如俄文、阿拉伯文、印尼文、越南文等)
+            if not is_allowed_lang:
+                return True, f"不允許的語言文字"
+
+    # 步驟 3：關鍵字掃描
     for kw in config.blocked_keywords:
         if kw in text or kw in clean_text: 
             return True, f"關鍵字: {kw}"
             
-    # 簡體字掃描
+    # 步驟 4：簡體字掃描
     if hanzidentifier.has_chinese(clean_text):
         for char in clean_text:
             # 絕對簡體字攔截
@@ -502,12 +523,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     full_content_log = " | ".join(all_texts)
     
     if not full_content_log:
-        if msg.sticker:
-            full_content_log = f"<貼圖: {msg.sticker.set_name}>"
-        elif msg.photo or msg.video or msg.animation or msg.document:
-            full_content_log = "<媒體檔案>"
-        else:
-            full_content_log = "<無文字或無法識別的內容>"
+        if msg.sticker: full_content_log = f"<貼圖: {msg.sticker.set_name}>"
+        elif msg.photo or msg.video or msg.animation or msg.document: full_content_log = "<媒體檔案>"
+        else: full_content_log = "<無文字內容>"
 
     config.add_log("INFO", f"[{msg.chat.title}] [{offender_name}]{is_edit_tag} 偵測: {full_content_log[:150]}...")
 
@@ -751,7 +769,7 @@ DASHBOARD_HTML = """
             <div class="lg:col-span-8 space-y-6">
                 <div class="bg-slate-800 p-6 rounded-2xl border border-slate-700 shadow-xl">
                     <div class="flex justify-between items-center mb-4">
-                        <h3 class="text-lg font-bold text-rose-400">🚫 阿茲卡班監獄紀錄</h3>
+                        <h3 class="text-lg font-bold text-rose-400">🚫 阿茲卡班監獄</h3>
                         <button onclick="location.reload()" class="text-[10px] text-sky-400 border border-sky-400 px-2 py-0.5 rounded hover:bg-sky-400 hover:text-white transition-all font-bold">刷新名單</button>
                     </div>
                     <div class="flex flex-wrap gap-2 mb-4">
