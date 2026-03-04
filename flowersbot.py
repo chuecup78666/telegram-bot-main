@@ -430,12 +430,31 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if is_bot: return 
 
-    # --- 1. 提取所有文字內容 (合併掃描) ---
+    # --- 1. 先提取所有文字與潛藏網址 ---
     all_texts: List[str] = []
+    urls_to_check: List[str] = [] # 專門收集所有網址以供後續比對
+    
     if msg.text: all_texts.append(msg.text)
     if msg.caption: all_texts.append(msg.caption)
     
-    # 提取轉傳來源名稱
+    # 提取實體中的網址 (解決一般夾帶連結)
+    ents = list(msg.entities or []) + list(msg.caption_entities or [])
+    for ent in ents:
+        if ent.type in [MessageEntity.URL, MessageEntity.TEXT_LINK]:
+            u = ent.url if ent.type == MessageEntity.TEXT_LINK else (msg.text or msg.caption)[ent.offset : ent.offset+ent.length]
+            if u: 
+                urls_to_check.append(u)
+                all_texts.append(f"[實體連結]: {u}") # 強制讓連結在 Log 現形
+    
+    # [防禦核心] 提取透過 API 偷塞的「隱藏預覽網址」
+    if msg.link_preview_options and msg.link_preview_options.url:
+        hidden_url = msg.link_preview_options.url
+        urls_to_check.append(hidden_url)
+        all_texts.append(f"[隱藏預覽]: {hidden_url}") # 強制讓預覽來源現形
+        
+    if msg.via_bot:
+        all_texts.append(f"[呼叫機器人]: @{msg.via_bot.username}")
+
     if msg.forward_origin:
         src_name = ""
         if hasattr(msg.forward_origin, 'chat') and msg.forward_origin.chat:
@@ -490,7 +509,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             full_content_log = "<無文字或無法識別的內容>"
 
-    config.add_log("INFO", f"[{msg.chat.title}] [{offender_name}]{is_edit_tag} 偵測: {full_content_log[:100]}...")
+    config.add_log("INFO", f"[{msg.chat.title}] [{offender_name}]{is_edit_tag} 偵測: {full_content_log[:150]}...")
 
     # --- 3. 管理員與 VIP 豁免檢查 ---
     if user:
@@ -555,24 +574,28 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             is_bad, r = contains_prohibited_content(t)
             if is_bad: violation_reason = r; break
 
-    # E. 連結白名單檢查
+    # [關鍵防禦] 嚴格驗證所有潛藏的 URL (包含實體連結與隱藏預覽連結)
     if not violation_reason:
-        ents = list(msg.entities or []) + list(msg.caption_entities or [])
-        for ent in ents:
-            if ent.type in [MessageEntity.URL, MessageEntity.TEXT_LINK]:
-                u = ent.url if ent.type == MessageEntity.TEXT_LINK else (msg.text or msg.caption)[ent.offset : ent.offset+ent.length]
-                u_clean = u.strip().lower()
-                
-                # 一般網域檢查
-                if not is_domain_allowed(u_clean):
-                    violation_reason = "不明連結"; break
-                
-                # Telegram 連結檢查 (t.me/xxx)
-                if "t.me/" in u_clean:
-                    path = u_clean.split('t.me/')[-1].split('/')[0].split('?')[0].replace("@", "")
+        for u in urls_to_check:
+            u_clean = u.strip().lower()
+            
+            # 一般網域檢查
+            if not is_domain_allowed(u_clean):
+                violation_reason = f"不明連結 ({u_clean[:30]}...)"
+                break
+            
+            # Telegram 連結檢查 (涵蓋所有官方縮網址分身)
+            tg_domains = ["t.me/", "telegram.me/", "telegram.dog/"]
+            for tg_domain in tg_domains:
+                if tg_domain in u_clean:
+                    path = u_clean.split(tg_domain)[-1].split('/')[0].split('?')[0].replace("@", "")
                     # 如果路徑不在白名單「完全相等」的項目中，就攔截
                     if path and path not in config.telegram_link_whitelist:
-                        violation_reason = f"未授權 TG 連結 ({path})"; break
+                        violation_reason = f"未授權 TG 連結 ({path})"
+                    break
+                    
+            if violation_reason:
+                break
 
     # --- 5. 執行懲罰動作 ---
     if violation_reason:
@@ -728,7 +751,7 @@ DASHBOARD_HTML = """
             <div class="lg:col-span-8 space-y-6">
                 <div class="bg-slate-800 p-6 rounded-2xl border border-slate-700 shadow-xl">
                     <div class="flex justify-between items-center mb-4">
-                        <h3 class="text-lg font-bold text-rose-400">🚫 阿茲卡班監獄</h3>
+                        <h3 class="text-lg font-bold text-rose-400">🚫 阿茲卡班監獄紀錄</h3>
                         <button onclick="location.reload()" class="text-[10px] text-sky-400 border border-sky-400 px-2 py-0.5 rounded hover:bg-sky-400 hover:text-white transition-all font-bold">刷新名單</button>
                     </div>
                     <div class="flex flex-wrap gap-2 mb-4">
