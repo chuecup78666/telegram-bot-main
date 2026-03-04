@@ -77,20 +77,43 @@
     <script>
         function fetchLogs() {
             fetch('/api/logs')
-                .then(response => response.json())
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error('伺服器回應錯誤: ' + response.status);
+                    }
+                    return response.json();
+                })
                 .then(logs => {
                     const terminal = document.getElementById('log-terminal');
-                    terminal.innerHTML = '';
+                    terminal.innerHTML = ''; // 清空目前的內容
+                    
+                    if (!logs || logs.length === 0) {
+                        terminal.innerHTML = '<div class="text-slate-500">目前尚無日誌紀錄...</div>';
+                        return;
+                    }
+
                     logs.forEach(log => {
-                        const colorClass = log.level === 'ERROR' ? 'rose-400' : 'sky-400';
+                        let colorClass = 'sky-400'; // 預設 INFO 顏色
+                        if (log.level === 'ERROR') colorClass = 'rose-400';
+                        else if (log.level === 'WARN') colorClass = 'amber-400';
+                        else if (log.level === 'SYSTEM') colorClass = 'emerald-400';
+
                         const div = document.createElement('div');
                         // 安全渲染，防止 XSS
                         div.innerHTML = `<span class="text-slate-500">[${log.time}]</span> <span class="text-${colorClass}">[${log.level}]</span> ${log.content}`;
                         terminal.appendChild(div);
                     });
                 })
-                .catch(err => console.error("抓取 Log 失敗", err));
+                .catch(err => {
+                    console.error("抓取 Log 失敗", err);
+                    const terminal = document.getElementById('log-terminal');
+                    // 如果原本是空的或是顯示連線中，才顯示錯誤訊息，避免干擾已經載入的舊紀錄
+                    if (terminal.innerHTML.includes('連線中') || terminal.innerHTML.trim() === '') {
+                        terminal.innerHTML = '<div class="text-rose-400 font-bold">⚠️ 無法連線到伺服器獲取日誌資料！<br>請確認 Python 程式碼中是否有正確加入 `@app.route(\'/api/logs\')` 路由。</div>';
+                    }
+                });
         }
+        
         // 初次載入
         fetchLogs();
         // 每 3 秒自動背景拉取一次
