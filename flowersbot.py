@@ -169,7 +169,7 @@ class BotConfig:
             "ecup78", "ttt3388", "setlanguage", "ecup788_lulu156", 
             "ecup788_hhaa555", "lulu156_ecup788", "flower_5555", 
             "ecup78_1", "ii17225278", "sexy_ttt3388", "line527817ii", 
-            "tmdgan2_0", "ttt3388sex", "ii1722", "taiwan",
+            "tmdgan2_0", "ttt3388sex", "ii1722", "taiwan", "Hsinchu1688"
             "sanchong168", "xinzhuang168", "taishanwugu168", 
             "zhonghe168", "tucheng_168", "linkou168", "keelung168"
         }
