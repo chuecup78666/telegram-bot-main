@@ -21,6 +21,7 @@ from telegram.ext import (
     MessageHandler,
     CommandHandler,
     CallbackQueryHandler,
+    ChatMemberHandler,
     filters,
 )
 from telegram.constants import ParseMode, ChatMemberStatus
@@ -106,7 +107,7 @@ class BotConfig:
         self.warning_duration = 5  
         self.max_violations = 3    
         
-# 網址白名單 (允許這些網域的連結)
+        # 網址白名單 (允許這些網域的連結)
         self.allowed_domains = {
             "google.com", "wikipedia.org", "telegram.org", "t.me", 
             "facebook.com", "github.com", "blogspot.com", "line.me", 
@@ -378,43 +379,67 @@ def contains_prohibited_content(text: str) -> Tuple[bool, Optional[str]]:
     return False, None
 
 async def handle_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    for new_member in update.message.new_chat_members:
-        if new_member.is_bot: continue
-        
-        try:
-            await context.bot.restrict_chat_member(
-                update.message.chat_id, 
-                new_member.id, 
-                ChatPermissions(can_send_messages=False)
-            )
-            config.add_log("INFO", f"新成員加入: 準備對 {new_member.full_name} 進行分類帽測驗")
-        except Exception as e:
-            config.add_log("WARN", f"無法限制新成員 {new_member.full_name}: {e}")
-            continue
+    # 改為接收 chat_member 狀態更新
+    result = update.chat_member
+    if not result: return
+    
+    old_status = result.old_chat_member.status
+    new_status = result.new_chat_member.status
+    
+    # 判斷是否為「新進群」的行為 (原本不在群內 -> 變成成員)
+    was_member = old_status in [
+        ChatMemberStatus.MEMBER,
+        ChatMemberStatus.OWNER,
+        ChatMemberStatus.ADMINISTRATOR,
+        ChatMemberStatus.RESTRICTED,
+    ]
+    is_member = new_status in [
+        ChatMemberStatus.MEMBER,
+        ChatMemberStatus.RESTRICTED,
+    ]
+    
+    # 如果原本就是成員，或者新狀態不是成員(例如退群)，則不處理
+    if was_member or not is_member: return
+    
+    new_member = result.new_chat_member.user
+    chat = result.chat
+    
+    if new_member.is_bot: return
+    
+    try:
+        await context.bot.restrict_chat_member(
+            chat.id, 
+            new_member.id, 
+            ChatPermissions(can_send_messages=False)
+        )
+        config.add_log("INFO", f"新成員加入: 準備對 {new_member.full_name} 進行分類帽測驗")
+    except Exception as e:
+        config.add_log("WARN", f"無法限制新成員 {new_member.full_name}: {e}")
+        return
 
-        available_qs = list(config.question_bank.values())
-        if not available_qs:
-            p = ChatPermissions(can_send_messages=True, can_send_audios=True, can_send_documents=True, can_send_photos=True, can_send_videos=True, can_send_video_notes=True, can_send_voice_notes=True, can_send_polls=True, can_send_other_messages=True, can_add_web_page_previews=True, can_invite_users=True, can_pin_messages=True, can_change_info=True)
-            await context.bot.restrict_chat_member(update.message.chat_id, new_member.id, p)
-            continue
-            
-        sample_size = min(3, len(available_qs))
-        selected_qs = random.sample(available_qs, sample_size)
+    available_qs = list(config.question_bank.values())
+    if not available_qs:
+        p = ChatPermissions(can_send_messages=True, can_send_audios=True, can_send_documents=True, can_send_photos=True, can_send_videos=True, can_send_video_notes=True, can_send_voice_notes=True, can_send_polls=True, can_send_other_messages=True, can_add_web_page_previews=True, can_invite_users=True, can_pin_messages=True, can_change_info=True)
+        await context.bot.restrict_chat_member(chat.id, new_member.id, p)
+        return
         
-        session_id = f"{update.message.chat_id}_{new_member.id}"
-        config.pending_verifications[session_id] = {
-            "user_id": new_member.id,
-            "user_name": new_member.full_name,
-            "chat_id": update.message.chat_id,
-            "chat_title": update.message.chat.title if update.message.chat else "未知群組", # [記錄群組名]
-            "questions": selected_qs,
-            "current_q": 0,
-            "message_id": None,
-            "expires_at": get_now_tw() + timedelta(minutes=5)
-        }
-        
-        config.loop.create_task(verification_timeout(session_id, context))
-        await send_verification_question(session_id, context)
+    sample_size = min(3, len(available_qs))
+    selected_qs = random.sample(available_qs, sample_size)
+    
+    session_id = f"{chat.id}_{new_member.id}"
+    config.pending_verifications[session_id] = {
+        "user_id": new_member.id,
+        "user_name": new_member.full_name,
+        "chat_id": chat.id,
+        "chat_title": chat.title if chat else "未知群組",
+        "questions": selected_qs,
+        "current_q": 0,
+        "message_id": None,
+        "expires_at": get_now_tw() + timedelta(minutes=5)
+    }
+    
+    config.loop.create_task(verification_timeout(session_id, context))
+    await send_verification_question(session_id, context)
 
 async def send_verification_question(session_id, context):
     session = config.pending_verifications.get(session_id)
@@ -865,7 +890,10 @@ def run_telegram_bot():
         loop.run_until_complete(clear())
         
         bot_app.add_handler(CommandHandler("unban", unban_handler))
-        bot_app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, handle_new_member))
+        
+        # 🟢 【修改此處】將原本的 MessageHandler 換成強大的 ChatMemberHandler
+        bot_app.add_handler(ChatMemberHandler(handle_new_member, ChatMemberHandler.CHAT_MEMBER))
+        
         bot_app.add_handler(CallbackQueryHandler(verify_callback, pattern="^v_"))
         bot_app.add_handler(MessageHandler(filters.ALL & (~filters.COMMAND), handle_message))
         bot_app.add_handler(MessageHandler(filters.UpdateType.EDITED_MESSAGE & (~filters.COMMAND), handle_message))
