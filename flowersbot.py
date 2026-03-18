@@ -898,7 +898,7 @@ def run_telegram_bot():
         bot_app.add_handler(MessageHandler(filters.ALL & (~filters.COMMAND), handle_message))
         bot_app.add_handler(MessageHandler(filters.UpdateType.EDITED_MESSAGE & (~filters.COMMAND), handle_message))
         
-        bot_app.run_polling(stop_signals=False, close_loop=False)
+        bot_app.run_polling(allowed_updates=Update.ALL_TYPES, stop_signals=False, close_loop=False)
     except Exception as e: config.add_log("ERROR", f"🦋 核心崩潰: {e}")
 
 if __name__ == '__main__':
