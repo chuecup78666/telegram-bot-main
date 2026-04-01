@@ -459,7 +459,7 @@ async def send_verification_question(session_id, context):
     mins, secs = divmod(remaining, 60)
     time_str = f"{mins} 分 {secs} 秒"
     
-    text = f"🦋 <b>花家霍格華茲入學測驗</b> 🦋\n\n🦉歡迎新同學：<a href='tg://user?id={session['user_id']}'>{session.get('user_name', '學員')}</a>\n🧙🏻請戴上分類帽並回答3個問題\n🇹🇼在5分鐘內證明你是台灣人類\n🪄如超時會被『沉默咒』永久禁言\n⚠️若被誤殺可以私訊客服救你\n⏱現在倒數計時開始：<b>{time_str}</b>\n📜<b>【 題目{q_idx+1} 】\n{q_data['text']}</b>"
+    text = f"🦋 <b>花家霍格華茲入學測驗</b> 🦋\n\n🦉歡迎新同學：<a href='tg://user?id={session['user_id']}'>{session.get('user_name', '學員')}</a>\n🧙🏻請戴上分類帽並回答3個問題\n🇹🇼在5分鐘內證明你是台灣人類\n🪄如超時會被『沉默咒』永久禁言\n⚠️若被誤殺可以私訊客服救你\n⏱現在倒數計時開始：<b>{time_str}</b>\n\n📜<b>【 題目{q_idx+1} 】\n{q_data['text']}</b>"
     
     chat_id = session["chat_id"]
     
