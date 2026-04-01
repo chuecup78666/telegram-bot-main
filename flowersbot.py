@@ -459,7 +459,7 @@ async def send_verification_question(session_id, context):
     mins, secs = divmod(remaining, 60)
     time_str = f"{mins} 分 {secs} 秒"
     
-    text = f"🦋 <b>霍格華茲入學測驗通知</b> 🦋\n\n<b>帽子分類帽測驗 ({q_idx+1}/{len(session['questions'])})</b>\n新入學員 <a href='tg://user?id={session['user_id']}'>{session.get('user_name', '學員')}</a> 請戴上分類帽作答\n⏱ <b>剩餘時間：{time_str}</b>\n(逾時將被施展「沉默咒」永久禁言)\n\n💡 <b>題目：{q_data['text']}</b>"
+    text = f"🦋 <b>花家霍格華茲入學測驗</b> 🦋\n\n🦉歡迎新同學：<a href='tg://user?id={session['user_id']}'>{session.get('user_name', '學員')}</a>\n🧙🏻請戴上分類帽並回答3個問題\n🇹🇼在5分鐘內證明你是台灣人類\n🪄如超時會被『沉默咒』永久禁言\n⚠️若被誤殺可以私訊客服救你\n⏱現在倒數計時開始：<b>{time_str}</b>\n📜<b>【 題目{q_idx+1} 】\n{q_data['text']}</b>"
     
     chat_id = session["chat_id"]
     
@@ -487,14 +487,14 @@ async def verify_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     target_user_id = int(parts[1])
     
     if query.from_user.id != target_user_id:
-        await query.answer("❌ 警告：這不是你的分類帽，請勿干擾他人測驗！", show_alert=True)
+        await query.answer("⚠️ 警告：這不是你的分類帽，請勿干擾他人測驗！", show_alert=True)
         return
         
     session_id = f"{query.message.chat_id}_{target_user_id}"
     session = config.pending_verifications.get(session_id)
     
     if not session:
-        await query.answer("❌ 你的分類帽測驗已過期，或者你被施展了遺忘咒！", show_alert=True)
+        await query.answer("⚠️ 你的分類帽測驗已過期，或者你被施展了遺忘咒！請重新入群。", show_alert=True)
         try: await query.message.delete()
         except: pass
         return
@@ -505,7 +505,7 @@ async def verify_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if ans_idx == current_q["correct_idx"]:
         session["current_q"] += 1
         if session["current_q"] >= len(session["questions"]):
-            await query.answer("🦋霍格華茲入學測驗通知🦋\n\n✅ 測驗通過！\n🪄歡迎加入霍格華茲學院！", show_alert=True)
+            await query.answer("🦋花家測驗結果🦋\n\n✅ 恭喜你測驗通過 🎉\n歡迎加入花家霍格華茲🪄", show_alert=True)
             p = ChatPermissions(can_send_messages=True, can_send_audios=True, can_send_documents=True, can_send_photos=True, can_send_videos=True, can_send_video_notes=True, can_send_voice_notes=True, can_send_polls=True, can_send_other_messages=True, can_add_web_page_previews=True, can_invite_users=True, can_pin_messages=True, can_change_info=True)
             await context.bot.restrict_chat_member(session["chat_id"], target_user_id, p)
             try: await query.message.delete()
@@ -513,10 +513,10 @@ async def verify_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             del config.pending_verifications[session_id]
             config.add_log("SUCCESS", f"新成員 {query.from_user.full_name} 通過分類帽測驗！")
         else:
-            await query.answer("🦋霍格華茲入學測驗通知🦋\n\n✅ 答對了！\n🪄分類帽正在思考...請繼續作答下一題。", show_alert=False)
+            await query.answer("🦋花家測驗通知🦋\n\n✅ ✅ 答對了！\n分類帽正在思考...\n請繼續回答下一題✏️", show_alert=False)
             await send_verification_question(session_id, context)
     else:
-        await query.answer("🦋霍格華茲入學測驗通知🦋\n\n❌ 答錯了！\n🪄你已被施展沉默咒，將無法在學院內發言。", show_alert=True)
+        await query.answer("🦋花家測驗通知🦋\n\n❌ 答錯了！\n你已被施展沉默咒『禁言』\n如有誤殺請聯絡客服救你💬", show_alert=True)
         try: await query.message.delete()
         except: pass
         
