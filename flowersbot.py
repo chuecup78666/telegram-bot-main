@@ -107,6 +107,12 @@ class BotConfig:
         self.warning_duration = 5  
         self.max_violations = 3    
         
+        # [新增] 群組要求先加入特定資料夾的設定 (使用群組 username 小寫)
+        self.folder_requirements = {
+            "lulu156_ecup788": "https://t.me/addlist/zaIeDeWETlMwMWVl",
+            "ttt3388sex": "https://t.me/addlist/hbPvefn50KpjY2I9"
+        }
+        
         # 網址白名單 (允許這些網域的連結)
         self.allowed_domains = {
             "google.com", "wikipedia.org", "telegram.org", "t.me", 
@@ -187,7 +193,6 @@ class BotConfig:
         
         # [新增] 記錄驗證失敗/逾時的用戶
         self.failed_verifications: Dict[str, Dict] = {}
-        
         self.deleted_timestamps: List[datetime] = []
         
         self.logs: List[Dict] = []
@@ -200,7 +205,6 @@ class BotConfig:
             self.blacklist_members = data.get("blacklist", {})
             self.question_bank = data.get("question_bank", {}) 
             
-            # [新增] 讀取驗證失敗名單
             self.failed_verifications = data.get("failed_verifications", {})
             for k, v in self.failed_verifications.items():
                 if isinstance(v.get("time"), str):
@@ -253,7 +257,7 @@ class BotConfig:
             "blacklist": self.blacklist_members,
             "tracker": tracker_serializable,
             "question_bank": self.question_bank,
-            "failed_verifications": self.failed_verifications, # [新增] 儲存驗證失敗名單
+            "failed_verifications": self.failed_verifications,
             "stats": {"deleted_timestamps": [ts.isoformat() for ts in self.deleted_timestamps]}
         }
         Thread(target=self.pm.save, args=(data,), daemon=True).start()
@@ -287,21 +291,18 @@ class BotConfig:
         if bl_key in self.blacklist_members: del self.blacklist_members[bl_key]
         self.save_state()
 
-    # [新增] 記錄驗證失敗的成員
     def record_failed_verification(self, user_id: int, name: str, chat_id: int, chat_title: str):
         now = get_now_tw()
         key = f"{chat_id}_{user_id}"
         self.failed_verifications[key] = {"uid": user_id, "name": name, "chat_id": chat_id, "chat_title": chat_title, "time": now}
         self.save_state()
 
-    # [新增] 移除驗證失敗記錄
     def remove_failed_verification(self, chat_id: int, user_id: int):
         key = f"{chat_id}_{user_id}"
         if key in self.failed_verifications:
             del self.failed_verifications[key]
             self.save_state()
 
-    # [修改] 取得「所有」的驗證失敗名單 (無24小時限制)
     def get_recent_failed(self, filter_chat_id: Optional[int] = None) -> List[Dict]:
         now = get_now_tw()
         all_failed = []
@@ -379,14 +380,12 @@ def contains_prohibited_content(text: str) -> Tuple[bool, Optional[str]]:
     return False, None
 
 async def handle_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # 改為接收 chat_member 狀態更新
     result = update.chat_member
     if not result: return
     
     old_status = result.old_chat_member.status
     new_status = result.new_chat_member.status
     
-    # 判斷是否為「新進群」的行為 (原本不在群內 -> 變成成員)
     was_member = old_status in [
         ChatMemberStatus.MEMBER,
         ChatMemberStatus.OWNER,
@@ -398,7 +397,6 @@ async def handle_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ChatMemberStatus.RESTRICTED,
     ]
     
-    # 如果原本就是成員，或者新狀態不是成員(例如退群)，則不處理
     if was_member or not is_member: return
     
     new_member = result.new_chat_member.user
@@ -426,6 +424,9 @@ async def handle_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
     sample_size = min(3, len(available_qs))
     selected_qs = random.sample(available_qs, sample_size)
     
+    chat_username = chat.username.lower() if chat.username else ""
+    required_folder = config.folder_requirements.get(chat_username)
+    
     session_id = f"{chat.id}_{new_member.id}"
     config.pending_verifications[session_id] = {
         "user_id": new_member.id,
@@ -435,11 +436,52 @@ async def handle_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "questions": selected_qs,
         "current_q": 0,
         "message_id": None,
+        "state": "waiting_folder_step1" if required_folder else "answering",
+        "required_folder": required_folder,
         "expires_at": get_now_tw() + timedelta(minutes=5)
     }
     
     config.loop.create_task(verification_timeout(session_id, context))
-    await send_verification_question(session_id, context)
+    
+    if required_folder:
+        await send_folder_requirement(session_id, context)
+    else:
+        await send_verification_question(session_id, context)
+
+async def send_folder_requirement(session_id, context):
+    session = config.pending_verifications.get(session_id)
+    if not session: return
+    
+    if session["state"] == "waiting_folder_step1":
+        keyboard = [
+            [InlineKeyboardButton("📁 1. 點我獲取專屬資料夾", callback_data=f"step1_v_{session['user_id']}")]
+        ]
+        text_instruction = "⚠️ <b>進入此群組前，必須先完成訂閱！</b>\n請先點擊下方按鈕獲取專屬資料夾連結。"
+    else:
+        keyboard = [
+            [InlineKeyboardButton("📁 1. 前往專屬資料夾", url=session["required_folder"])],
+            [InlineKeyboardButton("✅ 2. 我已加入，開始測驗", callback_data=f"start_v_{session['user_id']}")]
+        ]
+        text_instruction = "⚠️ <b>請確認您已加入專屬資料夾的所有頻道！</b>\n加入完成後，請點擊「開始測驗」進行分類帽問答。"
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    now = get_now_tw()
+    remaining = max(0, int((session["expires_at"] - now).total_seconds()))
+    mins, secs = divmod(remaining, 60)
+    time_str = f"{mins} 分 {secs} 秒"
+    
+    text = f"🦋 <b>霍格華茲入學前置申請作業</b> 🦋\n\n🦉歡迎新同學：<a href='tg://user?id={session['user_id']}'>{session.get('user_name', '學員')}</a>\n\n{text_instruction}\n\n⏱倒數計時：<b>{time_str}</b>"
+    
+    chat_id = session["chat_id"]
+    try:
+        if session.get("message_id"):
+            await context.bot.edit_message_text(chat_id=chat_id, message_id=session["message_id"], text=text, parse_mode=ParseMode.HTML, reply_markup=reply_markup, disable_web_page_preview=True)
+        else:
+            msg = await context.bot.send_message(chat_id, text=text, parse_mode=ParseMode.HTML, reply_markup=reply_markup, disable_web_page_preview=True)
+            session["message_id"] = msg.message_id
+    except Exception as e:
+        pass 
 
 async def send_verification_question(session_id, context):
     session = config.pending_verifications.get(session_id)
@@ -464,7 +506,7 @@ async def send_verification_question(session_id, context):
     chat_id = session["chat_id"]
     
     try:
-        if session["message_id"]: await context.bot.delete_message(chat_id, session["message_id"])
+        if session.get("message_id"): await context.bot.delete_message(chat_id, session["message_id"])
     except: pass
     
     try:
@@ -481,6 +523,49 @@ async def send_verification_question(session_id, context):
 async def verify_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     data = query.data
+    
+    if data.startswith("step1_v_"):
+        parts = data.split('_')
+        target_user_id = int(parts[2])
+        
+        if query.from_user.id != target_user_id:
+            await query.answer("⚠️ 這是別人的入群驗證，請勿干擾！", show_alert=True)
+            return
+            
+        session_id = f"{query.message.chat_id}_{target_user_id}"
+        session = config.pending_verifications.get(session_id)
+        if not session:
+            await query.answer("⚠️ 你的驗證已過期，請重新加入群組！", show_alert=True)
+            try: await query.message.delete()
+            except: pass
+            return
+            
+        session["state"] = "waiting_folder_step2"
+        await query.answer("請點擊『前往專屬資料夾』加入所有頻道，完成後再點擊『開始測驗』！", show_alert=True)
+        await send_folder_requirement(session_id, context)
+        return
+
+    if data.startswith("start_v_"):
+        parts = data.split('_')
+        target_user_id = int(parts[2])
+        
+        if query.from_user.id != target_user_id:
+            await query.answer("⚠️ 這是別人的入群驗證，請勿干擾！", show_alert=True)
+            return
+            
+        session_id = f"{query.message.chat_id}_{target_user_id}"
+        session = config.pending_verifications.get(session_id)
+        if not session:
+            await query.answer("⚠️ 你的驗證已過期，請重新加入群組！", show_alert=True)
+            try: await query.message.delete()
+            except: pass
+            return
+            
+        session["state"] = "answering"
+        await query.answer("✅ 測驗開始！請回答以下問題。", show_alert=False)
+        await send_verification_question(session_id, context)
+        return
+
     if not data.startswith("v_"): return
     
     parts = data.split('_')
@@ -520,7 +605,6 @@ async def verify_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try: await query.message.delete()
         except: pass
         
-        # [記錄失敗]
         chat_title = query.message.chat.title if query.message.chat else "未知群組"
         config.record_failed_verification(target_user_id, query.from_user.full_name, session["chat_id"], chat_title)
         
@@ -539,10 +623,9 @@ async def verification_timeout(session_id, context):
         
         if remaining <= 0:
             try:
-                if session["message_id"]: await context.bot.delete_message(session["chat_id"], session["message_id"])
+                if session.get("message_id"): await context.bot.delete_message(session["chat_id"], session["message_id"])
             except: pass
             
-            # [記錄逾時失敗]
             chat_title = session.get("chat_title", "未知群組")
             user_name = session.get("user_name", "學員")
             config.record_failed_verification(session["user_id"], user_name, session["chat_id"], chat_title)
@@ -552,26 +635,29 @@ async def verification_timeout(session_id, context):
             config.add_log("WARN", f"某成員分類帽測驗逾時，已被沒收魔杖維持禁言狀態。")
             break
             
-        q_idx = session["current_q"]
-        q_data = session["questions"][q_idx]
-        keyboard = []
-        for i, opt in enumerate(q_data["options"]):
-            keyboard.append([InlineKeyboardButton(opt, callback_data=f"v_{session['user_id']}_{q_idx}_{i}")])
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
         mins, secs = divmod(remaining, 60)
         time_str = f"{mins} 分 {secs} 秒"
         
-        text = f"🦋 <b>霍格華茲入學測驗通知</b> 🦋\n\n<b>帽子分類帽測驗 ({q_idx+1}/{len(session['questions'])})</b>\n新入學員 <a href='tg://user?id={session['user_id']}'>{session.get('user_name', '學員')}</a> 請戴上分類帽作答\n⏱ <b>剩餘時間：{time_str}</b>\n(逾時將被施展「沉默咒」永久禁言)\n\n💡 <b>題目：{q_data['text']}</b>"
-        
-        try:
-            if session["message_id"]:
-                if q_data.get("image_data"):
-                    await context.bot.edit_message_caption(chat_id=session["chat_id"], message_id=session["message_id"], caption=text, parse_mode=ParseMode.HTML, reply_markup=reply_markup)
-                else:
-                    await context.bot.edit_message_text(chat_id=session["chat_id"], message_id=session["message_id"], text=text, parse_mode=ParseMode.HTML, reply_markup=reply_markup)
-        except Exception:
-            pass 
+        if session.get("state") in ["waiting_folder_step1", "waiting_folder_step2"]:
+            await send_folder_requirement(session_id, context)
+        else:
+            q_idx = session["current_q"]
+            q_data = session["questions"][q_idx]
+            keyboard = []
+            for i, opt in enumerate(q_data["options"]):
+                keyboard.append([InlineKeyboardButton(opt, callback_data=f"v_{session['user_id']}_{q_idx}_{i}")])
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            text = f"🦋 <b>霍格華茲入學測驗通知</b> 🦋\n\n<b>帽子分類帽測驗 ({q_idx+1}/{len(session['questions'])})</b>\n新入學員 <a href='tg://user?id={session['user_id']}'>{session.get('user_name', '學員')}</a> 請戴上分類帽作答\n⏱ <b>剩餘時間：{time_str}</b>\n(逾時將被施展「沉默咒」永久禁言)\n\n💡 <b>題目：{q_data['text']}</b>"
+            
+            try:
+                if session.get("message_id"):
+                    if q_data.get("image_data"):
+                        await context.bot.edit_message_caption(chat_id=session["chat_id"], message_id=session["message_id"], caption=text, parse_mode=ParseMode.HTML, reply_markup=reply_markup)
+                    else:
+                        await context.bot.edit_message_text(chat_id=session["chat_id"], message_id=session["message_id"], text=text, parse_mode=ParseMode.HTML, reply_markup=reply_markup)
+            except Exception:
+                pass 
 
 async def unban_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat, admin_sender = update.effective_chat, update.effective_user
@@ -748,7 +834,7 @@ def index():
     filter_cid = request.args.get('filter_chat_id', type=int)
     
     members = config.get_recent_blacklist(filter_cid)
-    failed_members = config.get_recent_failed(filter_cid) # [傳送變數]
+    failed_members = config.get_recent_failed(filter_cid)
     filter_chats = config.get_blacklist_chats()
     
     recent_deleted_count = config.get_recent_deleted_count()
@@ -891,10 +977,9 @@ def run_telegram_bot():
         
         bot_app.add_handler(CommandHandler("unban", unban_handler))
         
-        # 🟢 【修改此處】將原本的 MessageHandler 換成強大的 ChatMemberHandler
         bot_app.add_handler(ChatMemberHandler(handle_new_member, ChatMemberHandler.CHAT_MEMBER))
+        bot_app.add_handler(CallbackQueryHandler(verify_callback, pattern="^(v_|step1_v_|start_v_)"))
         
-        bot_app.add_handler(CallbackQueryHandler(verify_callback, pattern="^v_"))
         bot_app.add_handler(MessageHandler(filters.ALL & (~filters.COMMAND), handle_message))
         bot_app.add_handler(MessageHandler(filters.UpdateType.EDITED_MESSAGE & (~filters.COMMAND), handle_message))
         
